@@ -41,6 +41,8 @@ node server.js
 
 Open http://localhost:3000 in Chrome. No npm install needed.
 
+No API key? If the Claude Code CLI is installed and signed in, the server uses it automatically (`claude -p`, about 20 seconds per turn). With neither, it runs in demo mode with canned lines.
+
 Check the pipeline on its own: `bruin validate pipeline` then `bruin run pipeline`.
 
 ## Files

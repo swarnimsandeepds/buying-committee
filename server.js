@@ -20,8 +20,11 @@ try {
   }
 } catch (_) {}
 const PORT = Number(process.env.PORT) || 3000;
-const PROVIDER = process.env.ANTHROPIC_API_KEY ? 'anthropic' : process.env.OPENAI_API_KEY ? 'openai' : 'mock';
-const MODEL = process.env.LLM_MODEL || (PROVIDER === 'anthropic' ? 'claude-haiku-5-5' : 'gpt-4o-mini');
+// With no API key, fall back to the Claude Code CLI if it is installed (uses that login, no key needed).
+const CLAUDE_CLI = process.env.LLM_PROVIDER === 'mock' ? null
+  : [path.join(os.homedir(), '.local', 'bin', 'claude'), '/usr/local/bin/claude', '/opt/homebrew/bin/claude'].find((c) => fs.existsSync(c)) || null;
+const PROVIDER = process.env.ANTHROPIC_API_KEY ? 'anthropic' : process.env.OPENAI_API_KEY ? 'openai' : CLAUDE_CLI ? 'claude-cli' : 'mock';
+const MODEL = process.env.LLM_MODEL || (PROVIDER === 'anthropic' ? 'claude-haiku-5-5' : PROVIDER === 'claude-cli' ? 'haiku' : 'gpt-4o-mini');
 
 // ---------- Agents ----------
 const TOPICS = ['cost', 'roi', 'security', 'integration', 'usability', 'adoption', 'credibility'];
@@ -142,7 +145,16 @@ function refreshInsight() {
 }
 
 // ---------- LLM ----------
+function claudeCli(system, user) {
+  return new Promise((resolve, reject) => {
+    const child = execFile(CLAUDE_CLI, ['-p', '--model', MODEL, '--output-format', 'text', '--system-prompt', system],
+      { cwd: os.tmpdir(), timeout: 60000, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => (err ? reject(new Error('Claude CLI: ' + String(stderr || err.message).slice(0, 300))) : resolve(stdout)));
+    child.stdin.end(user);
+  });
+}
 async function llmRaw(system, user) {
+  if (PROVIDER === 'claude-cli') return claudeCli(system, user);
   if (PROVIDER === 'anthropic') {
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',

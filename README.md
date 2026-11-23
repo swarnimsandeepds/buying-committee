@@ -68,6 +68,10 @@ No API key? If the Claude Code CLI is installed and signed in, the server uses i
 
 Check the pipeline on its own: `bruin validate pipeline` then `bruin run pipeline`.
 
+## Deploy (Render, free plan)
+
+The repo has a `Dockerfile` (Node plus the Bruin CLI) and a `render.yaml` blueprint. On Render choose New > Blueprint, pick this repo, and paste your keys when asked. Add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` for real buyer replies; without one the hosted app runs in demo mode. The free plan sleeps after 15 minutes idle, so the first visit can take about a minute, and history resets on each deploy.
+
 ## Files
 
 - `server.js`: agents, LLM calls, ledger, Bruin calls, BAND room

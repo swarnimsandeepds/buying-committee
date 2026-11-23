@@ -700,7 +700,14 @@ const server = http.createServer(async (req, res) => {
   if (!p.startsWith(path.join(ROOT, 'public'))) { res.writeHead(403); return res.end(); }
   fs.readFile(p, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
-    res.writeHead(200, { 'content-type': MIME[path.extname(p)] || 'application/octet-stream' });
+    const head = { 'content-type': MIME[path.extname(p)] || 'application/octet-stream' };
+    if (p.includes(path.sep + 'vendor' + path.sep)) head['cache-control'] = 'public, max-age=86400';
+    // Compress text files (the 3D library is 2 MB raw, about 450 KB gzipped) so the page loads fast over the internet.
+    if (/gzip/.test(req.headers['accept-encoding'] || '') && /\.(html|js|css|json|svg)$/.test(p)) {
+      head['content-encoding'] = 'gzip'; head.vary = 'accept-encoding';
+      data = require('zlib').gzipSync(data);
+    }
+    res.writeHead(200, head);
     res.end(data);
   });
 });

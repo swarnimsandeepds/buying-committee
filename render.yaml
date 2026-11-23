@@ -1,0 +1,24 @@
+# Render blueprint: New > Blueprint > pick this repo. Render builds the Dockerfile and asks for the keys below.
+services:
+  - type: web
+    name: buying-committee
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/status
+    envVars:
+      # One LLM key gives the buyers real replies. With neither, the app runs in demo mode with canned lines.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      # Optional sponsor integrations. Leave any of them empty to switch that one off.
+      - key: BAND_CFO_KEY
+        sync: false
+      - key: BAND_CTO_KEY
+        sync: false
+      - key: BAND_USER_KEY
+        sync: false
+      - key: TELEM_API_KEY
+        sync: false
+      - key: GLASSER_API_KEY
+        sync: false

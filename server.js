@@ -270,7 +270,7 @@ async function research(pitch) {
   if (telem.status === 'off') return null;
   const raj = agentById.cto;
   try {
-    const pickd = await llmJSON(raj, `The vendor just pitched: "${pitch}"\n\nBefore the committee questions them, you will check ONE thing on the live web. Pick the claim whose truth or typical range outsiders can verify (a price level, an industry benchmark, what a certification really covers, a typical time saving). Write one web search query for it.
+    const pickd = await llmJSON(raj, `The vendor just pitched: "${pitch}"\n\nBefore the committee questions them, you will check ONE thing on the live web. Pick the claim that matters most to the business case and that outsiders can verify: prefer a number (a time saving, a price level, an adoption or payback benchmark) over a certification or compliance badge. Write one web search query for it.
 Return JSON: {"claim":"<the vendor's claim, max 14 words>","query":"<web search query, max 12 words>"}`,
       () => ({ claim: firstWords(pitch, 12), query: firstWords(pitch, 10) + ' industry benchmark' }));
     const results = await telemSearch(String(pickd.query).slice(0, 200));
@@ -283,7 +283,10 @@ Return JSON: {"claim":"<the vendor's claim, max 14 words>","query":"<web search 
       reason: `Telem search, ${results.length} sources. ${results[0].summary.slice(0, 160)} (${results[0].url})` });
   } catch (e) { telem.status = 'error'; console.error('[telem] ' + e.message); return null; }
 }
-const researchNote = () => (session.research ? `\n${session.research}\nUse these findings if they support or contradict the vendor.\n` : '');
+// Only Raj (who ran the search) carries the findings, plus whoever asks the first question.
+// Everyone is told to raise it once at most, so one web finding does not take over the session.
+const researchNote = (agentId, first) => (session.research && (agentId === 'cto' || first)
+  ? `\n${session.research}\nIf this matters, raise it ONCE, briefly. If it has already come up in the conversation, do not repeat it: move on to your own concerns.\n` : '');
 
 // ---------- LLM ----------
 function claudeCli(system, user) {
@@ -371,25 +374,32 @@ Give 1 to 2 items in scores.`,
   return events;
 }
 
-async function askQuestion(agent) {
+async function draftQuestion(agent, latestAnswer) {
   const ins = session.insight;
   const w = ins && ins.weakest;
   const asked = session.events.filter((e) => e.type === 'question').map((e) => `${agentById[e.agent].name} asked about ${e.topic}`).join('; ') || 'none yet';
+  const mineW = ((ins && ins.weak) || []).filter((x) => agent.cares.includes(x.topic));
+  const focus = mineW.length ? mineW[0] : null;
   const hist = ins && ins.hist.length ? `In earlier sessions this same vendor was weakest on: ${ins.hist.slice(0, 2).map((h) => `${h.topic} (${h.avg_score}/10)`).join(', ')}.` : '';
-  const out = await llmJSON(agent, `Conversation so far:\n${transcript()}\n\nLive analytics from the committee's shared data pipeline: ${w ? `the vendor's weakest topic right now is "${w.topic}" at ${w.avg_score}/10 across ${w.n_scores} scores.` : 'no scores yet.'} ${hist}
+  const out = await llmJSON(agent, `Conversation so far:\n${transcript()}\n${latestAnswer ? `(The vendor's latest answer is the last line above; your colleague is scoring it right now.)\n` : ''}\nLive analytics from the committee's shared data pipeline: ${w ? `the vendor's weakest topic right now is "${w.topic}" at ${w.avg_score}/10 across ${w.n_scores} scores.` : 'no scores yet.'} ${hist}
 Questions already asked: ${asked}.
-${researchNote()}
-Ask the vendor ONE clear question, max 30 words, in a friendly and respectful way. Start with a brief acknowledgement of something they said well, then explore the weakest topic from your own angle. If it was already asked about twice, or is far outside your concerns, press on your own top concern instead. Do not repeat an earlier question.
+${researchNote(agent.id, !session.events.some((e) => e.type === 'question'))}
+Ask the vendor ONE clear question, max 30 words, in a friendly and respectful way. Start with a brief acknowledgement of something they said well, then ask about ${focus ? `"${focus.topic}" (${focus.avg_score}/10, the weakest of the topics you personally own)` : `"${agent.cares[0]}", which you own and nobody has scored yet`}. Stay inside your own role: do not ask about topics that belong to a colleague. If it was already asked about twice, or is far outside your concerns, press on your own top concern instead. Do not repeat an earlier question.
 Return JSON: {"question":"<spoken question>","topic":"<one of ${TOPICS.join(', ')}>","reason":"<why you chose this, max 18 words, mention the analytics if you used them>"}`,
     () => {
-      const topic = w ? w.topic : agent.cares[0];
+      const topic = focus ? focus.topic : agent.cares[0];
       return { question: `Thanks for that. Could you share one concrete number or proof point on ${topic}? It would really help us.`, topic, reason: `Pipeline shows ${topic} is the weakest topic so far.` };
     });
   if (!TOPICS.includes(out.topic)) out.topic = agent.cares[0];
+  return { agent, out };
+}
+function commitQuestion({ agent, out }) {
   const ev = logEvent({ type: 'question', agent: agent.id, topic: out.topic, text: String(out.question), reason: String(out.reason || '') });
   session.pending = { agent: agent.id, question: ev.text };
   return { ...ev, say: ev.text };
 }
+
+const askQuestion = async (agent) => commitQuestion(await draftQuestion(agent));
 
 function insightEvent() {
   const i = session.insight;
@@ -398,11 +408,20 @@ function insightEvent() {
   return { ...logEvent({ type: 'insight', topic: i.weakest.topic, score: i.weakest.avg_score, text, reason: i.source === 'bruin' ? 'Computed by the Bruin pipeline' : 'Local fallback, Bruin not available' }), source: i.source };
 }
 
-const QA_TURNS = Number(process.env.QA_TURNS) || 3; // one question per committee member
-// The committee stops early when it has already made up its mind: after two answers, if all
-// three members score the vendor clearly high or clearly low, a third question would not change the vote.
+const QA_TURNS = Number(process.env.QA_TURNS) || 2; // the committee decides after two questions
+// Who asks next: a member who has not asked yet, preferring the one whose concerns cover the weakest topic.
+function pickAsker() {
+  const asked = new Set(session.events.filter((e) => e.type === 'question').map((e) => e.agent));
+  const free = AGENTS.filter((a) => !asked.has(a.id));
+  const pool = free.length ? free : AGENTS;
+  const weak = session.insight && session.insight.weakest ? session.insight.weakest.topic : null;
+  const own = pool.filter((a) => a.cares.slice(0, 2).includes(weak)); // the first two concerns are the member's own; credibility is shared
+  return own[0] || pool.find((a) => a.cares.includes(weak)) || pool[0];
+}
+// The committee stops early when it has already made up its mind: after the first answer, if all
+// three members score the vendor clearly high or clearly low, another question would not change the vote.
 function committeeDecided() {
-  if (session.turn < 2) return null;
+  if (session.turn < 1) return null;
   const sc = agentState().map((a) => a.score).filter((x) => x != null);
   if (sc.length < AGENTS.length) return null;
   if (sc.every((x) => x >= 7.5)) return 'All three members already score the vendor 7.5 or higher. No more questions needed.';
@@ -422,7 +441,7 @@ async function handlePitch(text) {
   if (found) events.push(found);
   await refreshInsight();
   const ie = insightEvent(); if (ie) events.push(ie);
-  events.push(await askQuestion(AGENTS[0]));
+  events.push(await askQuestion(pickAsker()));
   return { events, agents: agentState(), insight: session.insight, pending: session.pending, done: false };
 }
 
@@ -431,29 +450,45 @@ async function handleAnswer(text) {
   const asker = agentById[session.pending.agent];
   logEvent({ type: 'answer', text });
   session.pending = null;
-  const events = await evaluate(asker, text, `${asker.name} asked the vendor a question and this is the answer.${researchNote()}`);
+  const last = session.turn + 1 >= QA_TURNS;
+  // The next question is written while the answer is being scored, so the vendor waits once, not twice.
+  const nextQ = last ? null : draftQuestion(pickAsker(), text);
+  const events = await evaluate(asker, text, `${asker.name} asked the vendor a question and this is the answer.${researchNote(asker.id)}`);
   await refreshInsight();
   const ie = insightEvent(); if (ie) events.push(ie);
   session.turn++;
   const early = committeeDecided();
   if (early && session.turn < QA_TURNS) events.push(logEvent({ type: 'insight', text: 'Committee is ready to decide early. ' + early, reason: 'Scores are unanimous, so the remaining questions were skipped' }));
   const done = session.turn >= QA_TURNS || !!early;
-  if (!done) events.push(await askQuestion(AGENTS[session.turn % AGENTS.length]));
+  if (!done) events.push(commitQuestion(await nextQ));
+  if (done) prefetchStep();
   return { events, agents: agentState(), insight: session.insight, pending: session.pending, done };
 }
 
 // Deliberation: steps 0-2 each agent argues, steps 3-5 each agent votes, step 6 verdict.
+function prefetchStep() {
+  const sid = session.id;
+  session.nextStep = computeStep().catch((e) => ({ error: e }));
+  session.nextStep.sid = sid;
+}
 async function handleStep() {
   if (!session) throw new Error('No session.');
+  const ready = session.nextStep || computeStep();
+  session.nextStep = null;
+  const res = await ready;
+  if (res && res.error) throw res.error;
+  if (res.phase !== 'verdict') prefetchStep();
+  return res;
+}
+async function computeStep() {
   const step = session.step++;
   const state = agentState();
   const ins = session.insight || { weak: [], claims: [] };
   const board = `Shared scoreboard from the data pipeline: ${ins.weak.map((w) => `${w.topic} ${w.avg_score}/10`).join(', ') || 'no scores'}. Your own average score of this vendor: ${(state.find((s) => s.id === AGENTS[step % 3].id) || {}).score ?? 'none'}/10.`;
-  const web = researchNote();
   if (step < 3) {
     const a = AGENTS[step];
     const inbox = await bandInbox(a.id);
-    const out = await llmJSON(a, `The vendor has left the room. The committee is now deliberating.\nFull conversation:\n${transcript()}\n\n${board}\n${web}${inbox}\nSpeak to your colleagues by name. Give your position in max 34 words. Be fair to the vendor: name one thing they did well as well as your concern. Disagree with a colleague politely if your concerns differ.
+    const out = await llmJSON(a, `The vendor has left the room. The committee is now deliberating.\nFull conversation:\n${transcript()}\n\n${board}\n${researchNote(a.id)}${inbox}\nSpeak to your colleagues by name. Give your position in max 34 words. Be fair to the vendor: name one thing they did well as well as your concern. Disagree with a colleague politely if your concerns differ.
 Return JSON: {"say":"<spoken statement>","leaning":"BUY" | "NO_BUY" | "UNSURE","reason":"<max 15 words>"}`,
       () => {
         const sc = (state.find((s) => s.id === a.id) || {}).score ?? 5;
@@ -464,20 +499,15 @@ Return JSON: {"say":"<spoken statement>","leaning":"BUY" | "NO_BUY" | "UNSURE","
     return { events: [{ ...ev, say: ev.text }], agents: state, phase: 'deliberation' };
   }
   if (step < 6) {
+    if (!session.votes) session.votes = AGENTS.map((a) => castVote(a, state, board));
     const a = AGENTS[step - 3];
-    const inbox = await bandInbox(a.id);
-    const out = await llmJSON(a, `The committee has deliberated. Full conversation including the deliberation:\n${transcript()}\n\n${board}\n${web}${inbox}Your leaning before hearing everyone: ${session.leanings[a.id] || 'UNSURE'}.\n\nCast your final vote. You may change your mind if a colleague made a good point.
-Return JSON: {"vote":"BUY" | "NO_BUY","say":"<spoken vote with one kind, constructive sentence of why and what would change your mind, max 26 words>","reason":"<the single biggest factor, max 15 words>","changed_mind":true | false}`,
-      () => {
-        const sc = (state.find((s) => s.id === a.id) || {}).score ?? 5;
-        const vote = sc >= 5.5 ? 'BUY' : 'NO_BUY';
-        return { vote, say: vote === 'BUY' ? 'I vote buy.' : 'I vote no.', reason: `Average score ${sc} out of 10.`, changed_mind: false };
-      });
+    const out = await session.votes[step - 3];
     const vote = out.vote === 'BUY' ? 'BUY' : 'NO_BUY';
     const ev = logEvent({ type: 'vote', agent: a.id, text: String(out.say), topic: vote, reason: (out.changed_mind ? 'Changed mind. ' : '') + String(out.reason || '') });
     return { events: [{ ...ev, say: ev.text, vote }], agents: state, phase: 'vote' };
   }
   const votes = session.events.filter((e) => e.type === 'vote');
+
   const buys = votes.filter((v) => v.topic === 'BUY').length;
   const verdict = buys >= 2 ? 'BUY' : 'NO BUY';
   await refreshInsight();
@@ -492,6 +522,19 @@ Return JSON: {"vote":"BUY" | "NO_BUY","say":"<spoken vote with one kind, constru
       claims: i.claims, weak: i.weak, table: i.table, hist: i.hist, source: i.source, pros: rep.pros, trend: rep.trend, rows: i.rows,
     },
   };
+}
+
+async function castVote(a, state, board0) {
+    const board = board0.replace(/Your own average score of this vendor: .*$/, `Your own average score of this vendor: ${(state.find((x) => x.id === a.id) || {}).score ?? 'none'}/10.`);
+    const inbox = await bandInbox(a.id);
+    const out = await llmJSON(a, `The committee has deliberated. Full conversation including the deliberation:\n${transcript()}\n\n${board}\n${researchNote(a.id)}${inbox}Your leaning before hearing everyone: ${session.leanings[a.id] || 'UNSURE'}.\n\nCast your final vote. You may change your mind if a colleague made a good point.
+Return JSON: {"vote":"BUY" | "NO_BUY","say":"<spoken vote with one kind, constructive sentence of why and what would change your mind, max 26 words>","reason":"<the single biggest factor, max 15 words>","changed_mind":true | false}`,
+      () => {
+        const sc = (state.find((s) => s.id === a.id) || {}).score ?? 5;
+        const vote = sc >= 5.5 ? 'BUY' : 'NO_BUY';
+        return { vote, say: vote === 'BUY' ? 'I vote buy.' : 'I vote no.', reason: `Average score ${sc} out of 10.`, changed_mind: false };
+      });
+    return out;
 }
 
 // ---------- HTTP ----------

@@ -13,7 +13,7 @@ Built at the Multiplayer AI Hackathon, Track 3: Grow with Agents.
 | Voice | Each agent has its own voice. You answer by microphone |
 | Visible decisions | Decision ledger on the right: every score, question choice, argument and vote, with the reason |
 | Agents coordinate about the human | Open deliberation after you leave the room, then a vote. Agents can change their minds |
-| Agents adapt | One question per member, and they stop early if all three have already made up their minds. After every answer the Bruin pipeline recomputes your weakest topic and the next agent attacks it |
+| Agents adapt | Two questions, each from the member who owns your weakest topic, and they stop after one if all three have already made up their minds. After every answer the Bruin pipeline recomputes your weakest topic and the next agent attacks it |
 | Memory that changes decisions | Bruin keeps every past session. The committee starts the next pitch knowing where you were weak last time |
 | Clear result with evidence | Verdict screen with each vote, your three weakest quotes and score by topic |
 

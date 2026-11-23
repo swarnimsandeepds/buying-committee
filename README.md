@@ -20,8 +20,9 @@ Built at the Multiplayer AI Hackathon, Track 3: Grow with Agents.
 ## How Bruin is used (mandatory tool)
 
 1. The server appends every agent decision to `data/events.jsonl`.
-2. After every turn it runs `bruin run pipeline`, which builds seven DuckDB tables with quality checks:
-   `raw.events`, `analytics.topic_scores`, `analytics.weak_topics`, `analytics.weakest_claims`, `analytics.strongest_claims`, `analytics.score_trend`, `analytics.pitcher_history`.
+2. After every turn it runs `bruin run pipeline`, which builds eight DuckDB tables with quality checks:
+   `raw.events`, `analytics.topic_scores`, `analytics.weak_topics`, `analytics.weakest_claims`, `analytics.strongest_claims`, `analytics.score_trend`, `analytics.session_summary`, `analytics.pitcher_history`.
+5. The live card in the ledger animates the scores after every turn (bar = committee average, dots = each buyer) and filters the ledger by topic or buyer. The History button charts every past pitch from `analytics.session_summary`.
 4. The verdict screen is an interactive Bruin report: a radar of scores by topic, a claim-by-claim trend line, filters per buyer and topic, and pros and cons with the exact quotes.
 3. The server reads those tables back with `bruin query` and hands the result to the next agent.
 

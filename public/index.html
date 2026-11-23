@@ -74,6 +74,27 @@
   .pc .it .s { font-weight:800; margin-right:6px; } .pc .it .w { color:var(--dim); font-size:12px; }
   #tip { position:fixed; z-index:50; max-width:300px; background:#0b0e14; border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:12.5px; pointer-events:none; display:none; box-shadow:0 6px 24px #000a; }
   @media (max-width: 900px) { .rgrid, .pc { grid-template-columns:1fr; } }
+  #live { margin-top:10px; }
+  #live .chips { margin-bottom:8px; } #live .chip { height:22px; padding:0 9px; font-size:11px; }
+  .lrow { display:grid; grid-template-columns:78px 1fr 34px; align-items:center; gap:8px; padding:4px 4px; border-radius:6px; cursor:pointer; font-size:12px; }
+  .lrow:hover, .lrow.sel { background:#3a31154d; } .lrow.sel .ll { color:var(--bruin); font-weight:700; }
+  .lrow .ll { color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .lrow .lt { position:relative; height:10px; border-radius:5px; background:#3a3115; }
+  .lrow .lf { position:absolute; left:0; top:0; bottom:0; width:0; border-radius:5px; transition:width .9s cubic-bezier(.2,.8,.2,1), background-color .6s; }
+  .lrow .ld { position:absolute; top:-3px; width:16px; height:16px; margin-left:-8px; border-radius:50%; border:2px solid #231c0c; left:0; opacity:0; transition:left .9s cubic-bezier(.2,.8,.2,1), opacity .4s; }
+  .lrow .ln { text-align:right; font-weight:700; font-variant-numeric:tabular-nums; }
+  .lrow.bump { animation:bump .7s ease-out; } @keyframes bump { 0% { background:#f4b74055; } 100% { background:transparent; } }
+  #lhint { font-size:10.5px; color:var(--dim); margin-top:6px; }
+  #histBtn { height:24px; padding:0 11px; border-radius:99px; font-size:11px; margin-left:6px; background:#231c0c; border-color:#6b5320; color:var(--bruin); }
+  #hist { position:absolute; inset:0; background:#080a0fee; display:none; align-items:flex-start; justify-content:center; padding:24px; overflow:auto; z-index:20; }
+  #hist.on { display:flex; }
+  #hcard { width:min(900px,100%); background:var(--panel); border:1px solid #6b5320; border-radius:18px; padding:22px 26px; }
+  #hcard h3 { margin:16px 0 6px; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:var(--dim); }
+  #hcard svg { display:block; width:100%; height:auto; } #hcard svg text { fill:var(--dim); font-size:11px; } #hcard svg .hit { cursor:pointer; }
+  .hrow { display:grid; grid-template-columns:120px 84px 64px 1fr; gap:10px; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:9px; margin-bottom:6px; background:#111621; font-size:12.5px; }
+  .hrow.sel { border-color:var(--bruin); } .hrow .hp { color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .check { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; }
+  .ck { border:1px solid var(--line); border-left-width:4px; border-radius:9px; padding:8px 10px; background:#111621; font-size:13px; }
   #again { margin-top:18px; height:42px; background:#2b6cff; border-color:#2b6cff; font-weight:600; }
   @media (max-width: 980px) { #app { grid-template-columns: 1fr 320px; } #subtitle { font-size:16px; } }
 </style>
@@ -84,7 +105,7 @@
     <canvas id="c"></canvas>
     <div id="top">
       <div><h1>The Buying Committee</h1><div class="sub">Pitch three AI buyers. They question you, argue with each other, and vote.</div></div>
-      <div><span class="pill" id="pLLM">LLM</span><span class="pill" id="pBruin">Bruin</span><span class="pill" id="pBand" style="display:none">BAND</span><span class="pill" id="pTelem" style="display:none">Telem</span><span class="pill" id="pGlasser" style="display:none">Glasser</span><span class="pill" id="pMem">memory</span></div>
+      <div><span class="pill" id="pLLM">LLM</span><span class="pill" id="pBruin">Bruin</span><span class="pill" id="pBand" style="display:none">BAND</span><span class="pill" id="pTelem" style="display:none">Telem</span><span class="pill" id="pGlasser" style="display:none">Glasser</span><span class="pill" id="pMem">memory</span><button id="histBtn" title="See all your past pitches">History</button></div>
     </div>
     <div id="subtitle"></div>
     <div id="dock">
@@ -96,7 +117,7 @@
         <button id="send">Deliver pitch</button>
       </div>
     </div>
-    <div id="overlay"><div id="card"></div></div><div id="tip"></div>
+    <div id="overlay"><div id="card"></div></div><div id="hist"><div id="hcard"></div></div><div id="tip"></div>
   </div>
   <div id="side">
     <h2>Decision ledger</h2>
@@ -104,7 +125,7 @@
       <div class="tag"><span>Live pipeline insight</span><span id="iSrc">waiting</span></div>
       <div class="big" id="iBig">No scores yet</div>
       <div class="meta" id="iMeta">Every agent decision is written to the ledger, run through the Bruin pipeline, and read back by the agents before their next question.</div>
-      <table id="grid"></table>
+      <div id="live"></div>
     </div>
     <div id="ledger"></div>
   </div>
@@ -350,6 +371,7 @@ function micStart() {
   recOn = true; rec.start(); $('mic').classList.add('on'); $('mic').textContent = '■ Stop';
 }
 $('mic').onclick = () => (recOn ? micStop() : micStart());
+$('histBtn').onclick = showHistory;
 $('mute').onclick = () => { muted = !muted; $('mute').textContent = muted ? '🔇' : '🔊'; if (muted && 'speechSynthesis' in window) speechSynthesis.cancel(); };
 
 // ---------------- Ledger ----------------
@@ -357,7 +379,7 @@ const LABEL = { claim_score: 'Scored a claim', reaction: 'Reacted', question: 'C
 function addLedger(ev) {
   const a = AG.find((x) => x.id === ev.agent);
   const col = a ? COLORS[a.id] : ev.type === 'insight' ? 'var(--bruin)' : '#6b7690';
-  const d = document.createElement('div'); d.className = 'ev'; d.style.borderLeftColor = col;
+  const d = document.createElement('div'); d.className = 'ev'; d.style.borderLeftColor = col; d.dataset.topic = ev.type === 'vote' || ev.type === 'verdict' ? '' : (ev.topic || ''); d.dataset.agent = ev.agent || ''; applyLedgerFilter(d);
   const sc = ev.type === 'claim_score' ? `<span class="score" style="color:${ev.score >= 6.5 ? 'var(--good)' : ev.score >= 4.5 ? 'var(--bruin)' : 'var(--bad)'}">${ev.score}/10 · ${esc(ev.topic)}</span>` : ev.type === 'question' ? `<span>${esc(ev.topic)}</span>` : ev.type === 'vote' ? `<span class="score" style="color:${ev.topic === 'BUY' ? 'var(--good)' : 'var(--bad)'}">${esc(ev.topic).replace('_', ' ')}</span>` : '';
   let body = '';
   if (ev.type === 'claim_score') body = `<div class="t"><q>${esc(ev.quote)}</q></div>`;
@@ -371,8 +393,7 @@ function renderInsight(i) {
   $('iSrc').textContent = i.source === 'bruin' ? 'Powered by Bruin' : 'Local fallback (Bruin not running)';
   $('iBig').innerHTML = `Weakest: ${esc(i.weakest.topic)} · ${i.weakest.avg_score}/10`;
   $('iMeta').textContent = `${i.rows} ledger rows processed in ${i.ms} ms. Next question targets this topic.` + (i.hist.length ? ` Memory from past sessions: weakest on ${i.hist[0].topic}.` : '');
-  const topics = TOPICS.filter((t) => i.table.some((r) => r.topic === t));
-  $('grid').innerHTML = `<tr><th></th>${topics.map((t) => `<th>${t.slice(0, 6)}</th>`).join('')}</tr>` + AG.map((a) => `<tr><td style="color:${COLORS[a.id]}">${a.name}</td>${topics.map((t) => { const r = i.table.find((x) => x.agent === a.id && x.topic === t); return `<td style="${heat(r && r.avg_score)}">${r ? r.avg_score : ''}</td>`; }).join('')}</tr>`).join('');
+  lastInsight = i; drawLive();
 }
 
 // ---------------- Flow ----------------
@@ -431,6 +452,93 @@ async function deliberate() {
     }
   } catch (e) { setBusy(false, `<span style="color:var(--bad)">${esc(e.message)}</span>`); }
 }
+// ---------------- Live, animated score card ----------------
+let lastInsight = null;
+const live = { agent: 'all', topic: null, rows: {}, shown: {} };
+const scoreCol = (s) => (s >= 6.5 ? 'var(--good)' : s >= 4.5 ? 'var(--bruin)' : 'var(--bad)');
+function applyLedgerFilter(d) {
+  const ok = (!live.topic || d.dataset.topic === live.topic) && (live.agent === 'all' || d.dataset.agent === live.agent);
+  d.style.display = ok ? '' : 'none';
+}
+function countTo(el, from, to) {
+  const t0 = performance.now();
+  const step = (now) => { const k = Math.min(1, (now - t0) / 800), v = from + (to - from) * (1 - Math.pow(1 - k, 3)); el.textContent = v.toFixed(1); if (k < 1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+}
+function drawLive() {
+  const i = lastInsight, box = $('live'); if (!i) return;
+  if (!box.dataset.ready) {
+    box.dataset.ready = '1';
+    box.innerHTML = '<div class="chips" id="lchips"></div><div id="lrows"></div><div id="lhint"></div>';
+  }
+  $('lchips').innerHTML = [['all', 'All'], ...AG.map((a) => [a.id, a.name])].map(([id, lab]) => `<button class="chip${live.agent === id ? ' on' : ''}" data-a="${id}">${esc(lab)}</button>`).join('');
+  $('lchips').querySelectorAll('[data-a]').forEach((b) => { b.onclick = () => { live.agent = b.dataset.a; drawLive(); document.querySelectorAll('#ledger .ev').forEach(applyLedgerFilter); }; });
+  const rowsEl = $('lrows');
+  const data = TOPICS.map((t) => {
+    const rs = i.table.filter((r) => r.topic === t && (live.agent === 'all' || r.agent === live.agent));
+    const n = rs.reduce((a, r) => a + (r.n_scores || 1), 0);
+    return { t, rs, avg: n ? Math.round((rs.reduce((a, r) => a + r.avg_score * (r.n_scores || 1), 0) / n) * 10) / 10 : null };
+  }).filter((x) => x.avg != null).sort((a, b) => a.avg - b.avg);
+  const seen = new Set();
+  data.forEach((x, idx) => {
+    seen.add(x.t);
+    let r = live.rows[x.t];
+    if (!r) {
+      r = live.rows[x.t] = document.createElement('div'); r.className = 'lrow';
+      r.innerHTML = `<span class="ll">${esc(x.t)}</span><span class="lt"><span class="lf"></span>${AG.map((a) => `<span class="ld" data-d="${a.id}" style="background:${COLORS[a.id]}"></span>`).join('')}</span><span class="ln">0.0</span>`;
+      r.onclick = () => { live.topic = live.topic === x.t ? null : x.t; drawLive(); document.querySelectorAll('#ledger .ev').forEach(applyLedgerFilter); };
+      r.onmouseleave = () => { $('tip').style.display = 'none'; };
+      rowsEl.appendChild(r);
+    }
+    r.onmousemove = (e) => { const tip = $('tip'); tip.innerHTML = `<b>${esc(x.t)}</b>: ${x.avg}/10<br>${x.rs.map((q) => `<span style="color:${COLORS[q.agent]}">${esc((AG.find((a) => a.id === q.agent) || {}).name || q.agent)}</span> ${q.avg_score} (${q.n_scores} score${q.n_scores > 1 ? 's' : ''})`).join('<br>')}<br><span style="color:var(--dim)">Click to show only this topic in the ledger</span>`; tip.style.display = 'block'; tip.style.left = Math.max(8, e.clientX - tip.offsetWidth - 14) + 'px'; tip.style.top = (e.clientY + 12) + 'px'; };
+    r.style.order = idx; r.classList.toggle('sel', live.topic === x.t);
+    const prev = live.shown[x.t];
+    requestAnimationFrame(() => {
+      r.querySelector('.lf').style.width = (x.avg * 10) + '%'; r.querySelector('.lf').style.backgroundColor = scoreCol(x.avg);
+      r.querySelectorAll('.ld').forEach((d) => { const q = x.rs.find((y) => y.agent === d.dataset.d); d.style.opacity = q ? 1 : 0; if (q) d.style.left = (q.avg_score * 10) + '%'; });
+    });
+    if (prev !== x.avg) { countTo(r.querySelector('.ln'), prev == null ? 0 : prev, x.avg); r.querySelector('.ln').style.color = scoreCol(x.avg); if (prev != null) { r.classList.remove('bump'); void r.offsetWidth; r.classList.add('bump'); } }
+    live.shown[x.t] = x.avg;
+  });
+  for (const t of Object.keys(live.rows)) if (!seen.has(t)) { live.rows[t].remove(); delete live.rows[t]; delete live.shown[t]; }
+  rowsEl.style.display = 'flex'; rowsEl.style.flexDirection = 'column';
+  $('lhint').textContent = live.topic || live.agent !== 'all' ? `Ledger filtered to ${[live.agent !== 'all' ? (AG.find((a) => a.id === live.agent) || {}).name : '', live.topic || ''].filter(Boolean).join(' · ')}. Click again to clear.` : 'Bar = committee average. Dots = each buyer. Hover for detail, click a topic to filter the ledger.';
+}
+function resetLive() { lastInsight = null; live.topic = null; live.agent = 'all'; live.rows = {}; live.shown = {}; const b = $('live'); b.innerHTML = ''; delete b.dataset.ready; }
+
+// ---------------- History (all past sessions) ----------------
+async function showHistory() {
+  const el = $('hcard'); $('hist').classList.add('on');
+  el.innerHTML = '<div style="color:var(--dim)">Loading your history from the Bruin pipeline…</div>';
+  let d; try { d = await (await fetch('/api/history')).json(); } catch (e) { d = { error: String(e) }; }
+  if (!d || d.error || !d.sessions) { el.innerHTML = `<div>Could not load history. ${esc((d && d.error) || '')}</div><button id="hclose" style="margin-top:14px;height:36px">Close</button>`; $('hclose').onclick = () => $('hist').classList.remove('on'); return; }
+  const S = d.sessions; let sel = S.length - 1;
+  const vcol = (v) => (v === 'BUY' ? 'var(--good)' : v ? 'var(--bad)' : '#6b7690');
+  const when = (ts) => { const t = new Date(ts); return isNaN(t) ? '' : t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
+  const tip = $('tip');
+  function draw() {
+    const W = 820, H = 220, L = 30, T = 14, B = 26, R = 14, n = Math.max(S.length, 2);
+    const X = (k) => L + (k * (W - L - R)) / (n - 1), Y = (v) => T + (1 - v / 10) * (H - T - B);
+    let g = '';
+    for (const y of [0, 2.5, 5, 7.5, 10]) g += `<line x1="${L}" x2="${W - R}" y1="${Y(y)}" y2="${Y(y)}" stroke="#2a3140"/><text x="${L - 6}" y="${Y(y) + 4}" text-anchor="end">${y}</text>`;
+    if (S.length > 1) g += `<polyline points="${S.map((x, k) => X(k) + ',' + Y(x.avg_score || 0)).join(' ')}" fill="none" stroke="var(--bruin)" stroke-width="2.5" stroke-linejoin="round"/>`;
+    S.forEach((x, k) => { g += `<circle class="hit" data-k="${k}" cx="${X(S.length > 1 ? k : 0.5)}" cy="${Y(x.avg_score || 0)}" r="${k === sel ? 9 : 6}" fill="${vcol(x.verdict)}" stroke="${k === sel ? '#fff' : '#0b0e14'}" stroke-width="2"/>`; });
+    const first = S[0], last = S[S.length - 1], delta = S.length > 1 ? Math.round((last.avg_score - first.avg_score) * 100) / 100 : null;
+    const buys = S.filter((x) => x.verdict === 'BUY').length, done = S.filter((x) => x.verdict).length;
+    const tops = [...(d.topics || [])].sort((a, b) => a.avg_score - b.avg_score);
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div style="color:var(--bruin);font-size:12px;letter-spacing:1px;text-transform:uppercase">${d.source === 'bruin' ? 'Your history · from the Bruin pipeline' : 'Your history · local fallback'}</div><div style="font-size:22px;font-weight:800;margin-top:2px">${S.length} pitch${S.length === 1 ? '' : 'es'} · ${buys} of ${done} won</div></div><button id="hclose" style="height:34px">Close</button></div>
+      ${S.length ? `<div style="color:var(--dim);font-size:13px;margin-top:4px">${delta == null ? 'Pitch again to see your trend.' : `Average score ${delta >= 0 ? 'up' : 'down'} <strong style="color:${delta >= 0 ? 'var(--good)' : 'var(--bad)'}">${Math.abs(delta)}</strong> since your first pitch.`} Click a dot or a row.</div>
+      <h3>Average score per pitch (dot colour = verdict)</h3><svg viewBox="0 0 ${W} ${H}">${g}</svg>
+      <h3>All-time score by topic</h3><div class="bars">${tops.map((w) => `<div><span class="l">${esc(w.topic)}</span><span class="b" style="width:${w.avg_score * 30}px;background:${scoreCol(w.avg_score)}"></span><span class="n">${w.avg_score}</span><span style="color:var(--dim);font-size:11.5px">${w.n_scores} scores</span></div>`).join('')}</div>
+      <h3>Sessions</h3>${[...S.keys()].reverse().map((k) => { const x = S[k]; return `<div class="hrow${k === sel ? ' sel' : ''}" data-k="${k}" style="cursor:pointer"><span>${esc(when(x.started_at))}</span><b style="color:${vcol(x.verdict)}">${esc(x.verdict || 'unfinished')}</b><b style="color:${scoreCol(x.avg_score || 0)}">${x.avg_score ?? ''}/10</b><span class="hp">${k === sel ? `Strongest <b style="color:var(--text)">${esc(x.strongest_topic || '')}</b> · weakest <b style="color:var(--text)">${esc(x.weakest_topic || '')}</b> · ${x.n_claims} scored claims` : esc(x.pitch || '')}</span></div>`; }).join('')}` : '<div style="color:var(--dim);margin-top:10px">No finished pitches yet. Deliver one and come back.</div>'}`;
+    $('hclose').onclick = () => { $('hist').classList.remove('on'); tip.style.display = 'none'; };
+    el.querySelectorAll('[data-k]').forEach((b) => { b.onclick = () => { sel = Number(b.dataset.k); tip.style.display = 'none'; draw(); }; });
+    el.querySelectorAll('circle[data-k]').forEach((c) => { const x = S[Number(c.dataset.k)]; c.onmousemove = (e) => { tip.innerHTML = `<b>${esc(when(x.started_at))}</b><br>Average <b>${x.avg_score}/10</b> · <b style="color:${vcol(x.verdict)}">${esc(x.verdict || 'unfinished')}</b><br>Strongest ${esc(x.strongest_topic || '')}, weakest ${esc(x.weakest_topic || '')}<br><span style="color:var(--dim)">${esc(x.pitch || '')}</span>`; tip.style.display = 'block'; tip.style.left = Math.min(innerWidth - tip.offsetWidth - 8, e.clientX + 14) + 'px'; tip.style.top = (e.clientY + 14) + 'px'; }; c.onmouseleave = () => { tip.style.display = 'none'; }; });
+  }
+  draw();
+}
+
 // ---------------- Interactive Bruin report ----------------
 function renderReport(v) {
   const rows = (v.trend || []).map((r) => ({ ...r }));
@@ -507,11 +615,13 @@ function showVerdict(v) {
     <div style="color:var(--dim);margin-top:6px">${v.buys} of ${v.total} voted to buy</div>
     <h3>Votes</h3>
     <div class="votes">${v.votes.map((x) => { const a = AG.find((y) => y.id === x.agent); return `<div class="vote" style="border-color:${COLORS[x.agent]}"><b style="color:${COLORS[x.agent]}">${esc(a.name)} · ${esc(a.role)}</b><div class="score" style="color:${x.vote === 'BUY' ? 'var(--good)' : 'var(--bad)'}">${x.vote.replace('_', ' ')}</div><div style="color:var(--dim);font-size:12.5px">${esc(x.reason)}</div></div>`; }).join('')}</div>
+    <h3>Decision checklist: who signed off what</h3>
+    <div class="check">${(v.checklist || []).map((c) => { const a = AG.find((y) => y.id === c.owner); const col = c.status === 'MET' ? 'var(--good)' : c.status === 'PARTLY' ? 'var(--bruin)' : 'var(--bad)'; return `<div class="ck" style="border-left-color:${col}"><div><b>${esc(c.topic)}</b> <span style="color:${a ? COLORS[a.id] : 'var(--dim)'}">${a ? esc(a.name) : 'All three'}</span></div><div class="score" style="color:${col}">${c.status === 'MET' ? '✓ Met' : c.status === 'PARTLY' ? '◐ Partly met' : '✕ Not met'}</div><div style="color:var(--dim);font-size:12px">${esc(c.why)}</div></div>`; }).join('')}</div>
     <div id="report"></div>
     <button id="again">Pitch again. They will remember this session.</button>`;
   renderReport(v);
   $('overlay').classList.add('on');
-  $('again').onclick = () => { $('overlay').classList.remove('on'); $('ledger').innerHTML = ''; for (const ch of Object.values(chars)) { ch.score = null; drawLabel(ch); } start(); };
+  $('again').onclick = () => { $('overlay').classList.remove('on'); $('ledger').innerHTML = ''; resetLive(); $('iBig').textContent = 'No scores yet'; for (const ch of Object.values(chars)) { ch.score = null; drawLabel(ch); } start(); };
 }
 function start() {
   phase = 'pitch'; $('send').textContent = 'Deliver pitch';

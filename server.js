@@ -37,6 +37,28 @@ const AGENTS = [
     persona: 'Warm, encouraging and protective of your team. Your people are tired of new tools, so you want to know what changes on Monday morning, and you help the vendor explain it.' },
 ];
 const agentById = Object.fromEntries(AGENTS.map((a) => [a.id, a]));
+// Each buyer owns two decision factors and signs them off; credibility is judged by all three.
+const OWN = { cfo: ['cost', 'roi'], cto: ['security', 'integration'], user: ['usability', 'adoption'] };
+const STATUSES = ['MET', 'PARTLY', 'NOT_MET'];
+function recordFactors(agentId, factors) {
+  const mine = [...OWN[agentId], 'credibility'];
+  for (const t of mine) {
+    const f = (Array.isArray(factors) ? factors : []).find((x) => x && x.topic === t) || {};
+    const status = STATUSES.includes(f.status) ? f.status : 'PARTLY';
+    const row = { topic: t, owner: agentId, status, why: String(f.why || '').slice(0, 160) };
+    if (t === 'credibility') session.cred.push(row); else session.checklist[t] = row;
+  }
+}
+function checklist() {
+  const rows = TOPICS.filter((t) => t !== 'credibility').map((t) => session.checklist[t] || { topic: t, owner: Object.keys(OWN).find((k) => OWN[k].includes(t)), status: 'PARTLY', why: 'Not discussed.' });
+  if (session.cred.length) {
+    const rank = session.cred.map((c) => STATUSES.indexOf(c.status)).sort((a, b) => a - b);
+    const mid = STATUSES[rank[Math.floor(rank.length / 2)]];
+    rows.push({ topic: 'credibility', owner: 'all', status: mid, why: session.cred.map((c) => `${agentById[c.owner].name}: ${c.why}`).join(' ').slice(0, 300) });
+  }
+  return rows;
+}
+const checklistText = () => checklist().map((c) => `${c.topic} (${c.owner === 'all' ? 'everyone' : agentById[c.owner].name}): ${c.status.replace('_', ' ')}`).join('; ');
 
 // ---------- Event ledger ----------
 let allEvents = [];
@@ -130,6 +152,40 @@ async function reportData() {
   const trend = mine.map((e, i) => { sum += e.score; return { step: i + 1, agent: e.agent, topic: e.topic, score: e.score, quote: e.quote, reason: e.reason, running_avg: Math.round((sum / (i + 1)) * 100) / 100 }; });
   const pros = mine.filter((e) => e.quote).sort((a, b) => b.score - a.score || a.seq - b.seq).slice(0, 3).map((e) => ({ agent: e.agent, topic: e.topic, score: e.score, quote: e.quote, reason: e.reason }));
   return { pros, trend };
+}
+
+// History across every session, for the History view. Bruin tables first, local math as the fallback.
+function localHistory() {
+  const by = new Map();
+  for (const e of allEvents) { if (!by.has(e.session_id)) by.set(e.session_id, []); by.get(e.session_id).push(e); }
+  const avg = (xs) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) / 100 : null);
+  const sessions = [...by.entries()].map(([id, evs]) => {
+    const sc = evs.filter((e) => e.type === 'claim_score' && e.score != null && e.topic);
+    const tm = new Map(); for (const e of sc) { if (!tm.has(e.topic)) tm.set(e.topic, []); tm.get(e.topic).push(e.score); }
+    const ta = [...tm.entries()].map(([t, xs]) => [t, avg(xs)]).sort((a, b) => a[1] - b[1]);
+    const v = evs.find((e) => e.type === 'verdict'), pt = evs.find((e) => e.type === 'pitch');
+    return { session_id: id, started_at: evs[0].ts, n_claims: sc.length, avg_score: avg(sc.map((e) => e.score)), verdict: v ? v.topic : null, weakest_topic: ta.length ? ta[0][0] : null, strongest_topic: ta.length ? ta[ta.length - 1][0] : null, pitch: pt ? pt.text : null };
+  }).sort((a, b) => String(a.started_at).localeCompare(String(b.started_at)));
+  const all = allEvents.filter((e) => e.type === 'claim_score' && e.score != null && e.topic);
+  const tm = new Map(); for (const e of all) { if (!tm.has(e.topic)) tm.set(e.topic, []); tm.get(e.topic).push(e); }
+  const topics = [...tm.entries()].map(([t, xs]) => ({ topic: t, avg_score: avg(xs.map((e) => e.score)), n_scores: xs.length, n_sessions: new Set(xs.map((e) => e.session_id)).size }));
+  return { sessions, topics, source: 'local' };
+}
+function history() {
+  const job = bruinQueue.then(async () => {
+    if (bruinBin && bruinStatus !== 'error') {
+      try {
+        const sessions = await bruinQuery('SELECT session_id, started_at, n_claims, avg_score, verdict, weakest_topic, strongest_topic, pitch FROM analytics.session_summary ORDER BY started_at');
+        const topics = await bruinQuery('SELECT topic, avg_score, n_scores, n_sessions FROM analytics.pitcher_history ORDER BY avg_score');
+        for (const r of sessions) for (const f of ['avg_score', 'n_claims']) if (r[f] != null) r[f] = Number(r[f]);
+        for (const r of topics) for (const f of ['avg_score', 'n_scores', 'n_sessions']) if (r[f] != null) r[f] = Number(r[f]);
+        return { sessions, topics, source: 'bruin' };
+      } catch (e) { console.error('[bruin] history query failed, using local fallback: ' + String(e.stderr || e.message).slice(0, 300)); }
+    }
+    return localHistory();
+  });
+  bruinQueue = job.catch(() => {});
+  return job;
 }
 
 // Runs the Bruin pipeline, then reads the analytics tables back. Falls back to in-process math if Bruin is unavailable.
@@ -486,7 +542,7 @@ function committeeDecided() {
 }
 
 async function handlePitch(text) {
-  session = { id: crypto.randomUUID(), seq: 0, events: [], turn: 0, step: 0, insight: null, pending: null, leanings: {}, research: null, finance: null, telemSession: null };
+  session = { id: crypto.randomUUID(), seq: 0, events: [], turn: 0, step: 0, insight: null, pending: null, leanings: {}, checklist: {}, cred: [], research: null, finance: null, telemSession: null };
   bandOpenRoom();
   logEvent({ type: 'pitch', text });
   // Long term memory: what earlier sessions looked like, read before anyone speaks.
@@ -544,14 +600,18 @@ async function computeStep() {
   if (step < 3) {
     const a = AGENTS[step];
     const inbox = await bandInbox(a.id);
-    const out = await llmJSON(a, `The vendor has left the room. The committee is now deliberating.\nFull conversation:\n${transcript()}\n\n${board}\n${researchNote(a.id)}${inbox}\nSpeak to your colleagues by name. Give your position in max 34 words. Be fair to the vendor: name one thing they did well as well as your concern. Disagree with a colleague politely if your concerns differ.
-Return JSON: {"say":"<spoken statement>","leaning":"BUY" | "NO_BUY" | "UNSURE","reason":"<max 15 words>"}`,
+    const out = await llmJSON(a, `The vendor has left the room. The committee is now deliberating.\nFull conversation:\n${transcript()}\n\n${board}\n${researchNote(a.id)}${inbox}\nThe committee splits the decision so nothing is missed. You personally sign off on: ${OWN[a.id].join(' and ')}. Everyone also judges credibility. ${Object.keys(session.checklist).length ? `Already signed off by colleagues: ${checklistText()}.` : ''}
+Speak to your colleagues by name, in max 40 words. Say plainly whether each of YOUR two factors is met, and name one thing the vendor did well. Do not rule on a colleague's factors; you may ask them about theirs.
+Return JSON: {"say":"<spoken statement>","factors":[{"topic":"${OWN[a.id][0]}","status":"MET" | "PARTLY" | "NOT_MET","why":"<max 14 words>"},{"topic":"${OWN[a.id][1]}","status":"...","why":"..."},{"topic":"credibility","status":"...","why":"..."}],"leaning":"BUY" | "NO_BUY" | "UNSURE","reason":"<max 15 words>"}`,
       () => {
         const sc = (state.find((s) => s.id === a.id) || {}).score ?? 5;
-        return { say: sc >= 5.5 ? 'I can live with this. The answers on my side held up.' : 'I am not there. Too many of my questions got soft answers.', leaning: sc >= 5.5 ? 'BUY' : 'NO_BUY', reason: `My average score is ${sc}.` };
+        const st = sc >= 6.5 ? 'MET' : sc >= 4.5 ? 'PARTLY' : 'NOT_MET';
+        return { say: sc >= 5.5 ? `On ${OWN[a.id].join(' and ')}, I am satisfied. The answers on my side held up.` : `On ${OWN[a.id].join(' and ')}, I am not there yet. I would need firmer answers.`, factors: [...OWN[a.id], 'credibility'].map((t) => ({ topic: t, status: st, why: `Average score ${sc}.` })), leaning: sc >= 5.5 ? 'BUY' : 'NO_BUY', reason: `My average score is ${sc}.` };
       });
     session.leanings[a.id] = out.leaning;
-    const ev = logEvent({ type: 'deliberation', agent: a.id, text: String(out.say), reason: `Leaning ${out.leaning}. ${out.reason || ''}` });
+    recordFactors(a.id, out.factors);
+    const mine = OWN[a.id].map((t) => `${t}: ${session.checklist[t].status.replace('_', ' ').toLowerCase()}`).join(', ');
+    const ev = logEvent({ type: 'deliberation', agent: a.id, text: String(out.say), reason: `Signed off ${mine}. Leaning ${out.leaning}. ${out.reason || ''}` });
     return { events: [{ ...ev, say: ev.text }], agents: state, phase: 'deliberation' };
   }
   if (step < 6) {
@@ -566,16 +626,17 @@ Return JSON: {"say":"<spoken statement>","leaning":"BUY" | "NO_BUY" | "UNSURE","
 
   const buys = votes.filter((v) => v.topic === 'BUY').length;
   const verdict = buys >= 2 ? 'BUY' : 'NO BUY';
+  // Log the verdict first, so the pipeline run below includes it and History shows it straight away.
+  const ev = logEvent({ type: 'verdict', topic: verdict, text: `${verdict}, ${buys} to ${votes.length - buys}`, reason: 'Majority vote of the committee' });
   await refreshInsight();
   const i = session.insight;
   const rep = await reportData();
-  const ev = logEvent({ type: 'verdict', topic: verdict, text: `${verdict}, ${buys} to ${votes.length - buys}`, reason: 'Majority vote of the committee' });
   return {
     events: [ev], agents: state, phase: 'verdict',
     verdict: {
       result: verdict, buys, total: votes.length,
       votes: votes.map((v) => ({ agent: v.agent, vote: v.topic, say: v.text, reason: v.reason })),
-      claims: i.claims, weak: i.weak, table: i.table, hist: i.hist, source: i.source, pros: rep.pros, trend: rep.trend, rows: i.rows,
+      checklist: checklist(), claims: i.claims, weak: i.weak, table: i.table, hist: i.hist, source: i.source, pros: rep.pros, trend: rep.trend, rows: i.rows,
     },
   };
 }
@@ -583,7 +644,7 @@ Return JSON: {"say":"<spoken statement>","leaning":"BUY" | "NO_BUY" | "UNSURE","
 async function castVote(a, state, board0) {
     const board = board0.replace(/Your own average score of this vendor: .*$/, `Your own average score of this vendor: ${(state.find((x) => x.id === a.id) || {}).score ?? 'none'}/10.`);
     const inbox = await bandInbox(a.id);
-    const out = await llmJSON(a, `The committee has deliberated. Full conversation including the deliberation:\n${transcript()}\n\n${board}\n${researchNote(a.id)}${inbox}Your leaning before hearing everyone: ${session.leanings[a.id] || 'UNSURE'}.\n\nCast your final vote. You may change your mind if a colleague made a good point.
+    const out = await llmJSON(a, `The committee has deliberated. Full conversation including the deliberation:\n${transcript()}\n\n${board}\n${researchNote(a.id)}${inbox}Your leaning before hearing everyone: ${session.leanings[a.id] || 'UNSURE'}.\n\nThe committee's checklist, each factor signed off by its owner: ${checklistText()}.\n\nCast your final vote. Base it on the whole checklist, weighting your own factors most: a BUY needs no factor left NOT MET, or a clear reason why that gap is acceptable. You may change your mind if a colleague made a good point.
 Return JSON: {"vote":"BUY" | "NO_BUY","say":"<spoken vote with one kind, constructive sentence of why and what would change your mind, max 26 words>","reason":"<the single biggest factor, max 15 words>","changed_mind":true | false}`,
       () => {
         const sc = (state.find((s) => s.id === a.id) || {}).score ?? 5;
@@ -613,6 +674,11 @@ const server = http.createServer(async (req, res) => {
     try {
       if (url.pathname === '/api/status') {
         return send(res, 200, { maxQuestions: QA_TURNS, provider: PROVIDER, model: MODEL, bruin: bruinStatus, band: band.status, telem: telem.status, glasser: glasser.status, bandRoom: band.room, agents: AGENTS.map(({ id, name, role, cares }) => ({ id, name, role, cares })), topics: TOPICS, pastSessions: new Set(allEvents.map((e) => e.session_id)).size });
+      }
+      if (url.pathname === '/api/history') {
+        const h = await history();
+        h.sessions = h.sessions.filter((x) => x.n_claims > 0).map((x) => ({ ...x, pitch: x.pitch ? String(x.pitch).slice(0, 160) : null }));
+        return send(res, 200, h);
       }
       if (req.method !== 'POST') return send(res, 405, { error: 'POST only' });
       if (busy) return send(res, 429, { error: 'The committee is still thinking.' });

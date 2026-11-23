@@ -62,6 +62,7 @@ function logEvent(e) {
   fs.appendFileSync(EVENTS_FILE, JSON.stringify(ev) + '\n');
   allEvents.push(ev);
   session.events.push(ev);
+  bandMirror(ev);
   return ev;
 }
 
@@ -142,6 +143,84 @@ function refreshInsight() {
   });
   bruinQueue = job.catch(() => {});
   return job;
+}
+
+// ---------- BAND (optional) ----------
+// Each committee member is a BAND remote agent. Every session gets a BAND room where the agents
+// post their questions, arguments and votes to each other, and each agent reads what its
+// colleagues addressed to it on BAND before it argues or votes.
+const BAND_URL = (process.env.BAND_URL || 'https://app.band.ai/api/v1').replace(/\/$/, '');
+const BAND_KEYS = { cfo: process.env.BAND_CFO_KEY, cto: process.env.BAND_CTO_KEY, user: process.env.BAND_USER_KEY };
+const band = { status: 'off', me: {}, room: null, queue: Promise.resolve() };
+
+async function bandApi(agentId, method, pathname, body) {
+  const r = await fetch(BAND_URL + pathname, {
+    method, headers: { 'content-type': 'application/json', 'x-api-key': BAND_KEYS[agentId] },
+    body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(10000),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`BAND ${method} ${pathname} -> ${r.status} ${JSON.stringify(j.error || j).slice(0, 200)}`);
+  return j.data;
+}
+async function bandInit() {
+  if (!AGENTS.every((a) => BAND_KEYS[a.id])) return;
+  try {
+    for (const a of AGENTS) band.me[a.id] = await bandApi(a.id, 'GET', '/agent/me');
+    band.status = 'ready';
+  } catch (e) { band.status = 'error'; console.error('[band] ' + e.message); }
+}
+function bandDo(fn) {
+  if (band.status !== 'ready') return band.queue;
+  band.queue = band.queue.then(fn).catch((e) => console.error('[band] ' + e.message));
+  return band.queue;
+}
+function bandOpenRoom() {
+  band.room = null;
+  return bandDo(async () => {
+    const room = await bandApi('cfo', 'POST', '/agent/chats', { chat: { title: 'Buying Committee ' + new Date().toISOString().slice(0, 16).replace('T', ' ') } });
+    const ownerId = band.me.cfo.owner_uuid || band.me.cfo.owner_id;
+    for (const id of [band.me.cto.id, band.me.user.id, ownerId].filter(Boolean)) {
+      try { await bandApi('cfo', 'POST', `/agent/chats/${room.id}/participants`, { participant: { participant_id: id, role: 'member' } }); }
+      catch (e) { console.error('[band] ' + e.message); }
+    }
+    band.room = room.id;
+    console.log('[band] room ' + room.id);
+  });
+}
+// An agent posts to the room, addressed to its two colleagues (BAND requires a mention).
+function bandPost(agentId, text) {
+  return bandDo(async () => {
+    if (!band.room) return;
+    const others = AGENTS.filter((a) => a.id !== agentId).map((a) => band.me[a.id]);
+    await bandApi(agentId, 'POST', `/agent/chats/${band.room}/messages`, {
+      message: { content: others.map((o) => '@' + o.handle).join(' ') + ' ' + String(text).slice(0, 1800), mentions: others.map((o) => ({ id: o.id, handle: o.handle, name: o.name })) },
+    });
+  });
+}
+// What colleagues said to this agent on BAND, as plain text for its prompt.
+async function bandInbox(agentId) {
+  if (band.status !== 'ready') return '';
+  await band.queue;
+  if (!band.room) return '';
+  try {
+    const msgs = await bandApi(agentId, 'GET', `/agent/chats/${band.room}/context?limit=30`);
+    const names = Object.fromEntries(AGENTS.map((a) => [band.me[a.id].id, a.name]));
+    const lines = (Array.isArray(msgs) ? msgs : []).filter((m) => m.sender_id && m.sender_id !== band.me[agentId].id && names[m.sender_id])
+      .sort((a, b) => String(a.inserted_at).localeCompare(String(b.inserted_at))).slice(-8)
+      .map((m) => `${names[m.sender_id]}: ${String(m.content || '').replace(/@\[\[[^\]]*\]\]|@\S+\/\S+/g, '').trim()}`);
+    return lines.length ? `\nMessages your colleagues sent you in the committee's BAND room:\n${lines.join('\n')}\n` : '';
+  } catch (e) { console.error('[band] ' + e.message); return ''; }
+}
+function bandMirror(ev) {
+  if (band.status !== 'ready') return;
+  const asker = session.pending ? session.pending.agent : 'cfo';
+  if (ev.type === 'pitch') bandPost('cfo', 'The vendor pitched: ' + ev.text);
+  else if (ev.type === 'question') bandPost(ev.agent, `My question to the vendor (${ev.topic}): ${ev.text} Why: ${ev.reason || ''}`);
+  else if (ev.type === 'answer') bandPost(asker, 'The vendor answered me: ' + ev.text);
+  else if (ev.type === 'insight') bandPost('cfo', 'Pipeline update. ' + ev.text);
+  else if (ev.type === 'deliberation') bandPost(ev.agent, `${ev.text} (${ev.reason || ''})`);
+  else if (ev.type === 'vote') bandPost(ev.agent, `My vote: ${ev.topic}. ${ev.text}`);
+  else if (ev.type === 'verdict') bandPost('cfo', 'Verdict: ' + ev.text);
 }
 
 // ---------- LLM ----------
@@ -260,6 +339,7 @@ const QA_TURNS = 6; // two rounds of three agents
 
 async function handlePitch(text) {
   session = { id: crypto.randomUUID(), seq: 0, events: [], turn: 0, step: 0, insight: null, pending: null, leanings: {} };
+  bandOpenRoom();
   logEvent({ type: 'pitch', text });
   // Long term memory: what earlier sessions looked like, read before anyone speaks.
   const before = localInsight().hist;
@@ -295,7 +375,8 @@ async function handleStep() {
   const board = `Shared scoreboard from the data pipeline: ${ins.weak.map((w) => `${w.topic} ${w.avg_score}/10`).join(', ') || 'no scores'}. Your own average score of this vendor: ${(state.find((s) => s.id === AGENTS[step % 3].id) || {}).score ?? 'none'}/10.`;
   if (step < 3) {
     const a = AGENTS[step];
-    const out = await llmJSON(a, `The vendor has left the room. The committee is now deliberating.\nFull conversation:\n${transcript()}\n\n${board}\n\nSpeak to your colleagues by name. Argue your position in max 32 words. Disagree with a colleague if your concerns differ.
+    const inbox = await bandInbox(a.id);
+    const out = await llmJSON(a, `The vendor has left the room. The committee is now deliberating.\nFull conversation:\n${transcript()}\n\n${board}\n${inbox}\nSpeak to your colleagues by name. Argue your position in max 32 words. Disagree with a colleague if your concerns differ.
 Return JSON: {"say":"<spoken statement>","leaning":"BUY" | "NO_BUY" | "UNSURE","reason":"<max 15 words>"}`,
       () => {
         const sc = (state.find((s) => s.id === a.id) || {}).score ?? 5;
@@ -307,7 +388,8 @@ Return JSON: {"say":"<spoken statement>","leaning":"BUY" | "NO_BUY" | "UNSURE","
   }
   if (step < 6) {
     const a = AGENTS[step - 3];
-    const out = await llmJSON(a, `The committee has deliberated. Full conversation including the deliberation:\n${transcript()}\n\n${board}\nYour leaning before hearing everyone: ${session.leanings[a.id] || 'UNSURE'}.\n\nCast your final vote. You may change your mind if a colleague made a good point.
+    const inbox = await bandInbox(a.id);
+    const out = await llmJSON(a, `The committee has deliberated. Full conversation including the deliberation:\n${transcript()}\n\n${board}\n${inbox}Your leaning before hearing everyone: ${session.leanings[a.id] || 'UNSURE'}.\n\nCast your final vote. You may change your mind if a colleague made a good point.
 Return JSON: {"vote":"BUY" | "NO_BUY","say":"<spoken vote with one sentence of why, max 22 words>","reason":"<the single biggest factor, max 15 words>","changed_mind":true | false}`,
       () => {
         const sc = (state.find((s) => s.id === a.id) || {}).score ?? 5;
@@ -353,7 +435,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/api/')) {
     try {
       if (url.pathname === '/api/status') {
-        return send(res, 200, { provider: PROVIDER, model: MODEL, bruin: bruinStatus, agents: AGENTS.map(({ id, name, role, cares }) => ({ id, name, role, cares })), topics: TOPICS, pastSessions: new Set(allEvents.map((e) => e.session_id)).size });
+        return send(res, 200, { provider: PROVIDER, model: MODEL, bruin: bruinStatus, band: band.status, bandRoom: band.room, agents: AGENTS.map(({ id, name, role, cares }) => ({ id, name, role, cares })), topics: TOPICS, pastSessions: new Set(allEvents.map((e) => e.session_id)).size });
       }
       if (req.method !== 'POST') return send(res, 405, { error: 'POST only' });
       if (busy) return send(res, 429, { error: 'The committee is still thinking.' });
@@ -380,10 +462,11 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-findBruin().then(() => {
+Promise.all([findBruin(), bandInit()]).then(() => {
   server.listen(PORT, () => {
     console.log(`\n  The Buying Committee is running:  http://localhost:${PORT}\n`);
     console.log(`  LLM:   ${PROVIDER === 'mock' ? 'DEMO MODE (no API key found in .env, agents use canned lines)' : PROVIDER + ' / ' + MODEL}`);
     console.log(`  Bruin: ${bruinBin ? 'found at ' + bruinBin : 'NOT FOUND. Install it, then restart. Using local fallback for now.'}\n`);
+    console.log(`  BAND:  ${band.status === 'ready' ? 'connected as ' + AGENTS.map((a) => band.me[a.id].handle).join(', ') : band.status === 'off' ? 'off (add the three BAND_*_KEY values to .env to turn it on)' : 'ERROR, see above'}\n`);
   });
 });

@@ -66,7 +66,7 @@
     <canvas id="c"></canvas>
     <div id="top">
       <div><h1>The Buying Committee</h1><div class="sub">Pitch three AI buyers. They question you, argue with each other, and vote.</div></div>
-      <div><span class="pill" id="pLLM">LLM</span><span class="pill" id="pBruin">Bruin</span><span class="pill" id="pMem">memory</span></div>
+      <div><span class="pill" id="pLLM">LLM</span><span class="pill" id="pBruin">Bruin</span><span class="pill" id="pBand" style="display:none">BAND</span><span class="pill" id="pMem">memory</span></div>
     </div>
     <div id="subtitle"></div>
     <div id="dock">
@@ -390,6 +390,7 @@ $('input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.meta
   $('pLLM').textContent = st.provider === 'mock' ? 'DEMO MODE · no API key' : `${st.provider} · ${st.model}`;
   $('pLLM').className = 'pill ' + (st.provider === 'mock' ? 'warn' : 'ok');
   $('pBruin').textContent = 'Bruin · ' + st.bruin; $('pBruin').className = 'pill ' + (st.bruin === 'ready' ? 'ok' : 'warn');
+  if (st.band && st.band !== 'off') { $('pBand').style.display = ''; $('pBand').textContent = 'BAND · ' + st.band; $('pBand').className = 'pill ' + (st.band === 'ready' ? 'ok' : 'warn'); }
   $('pMem').textContent = `memory · ${st.pastSessions} past session${st.pastSessions === 1 ? '' : 's'}`;
   resize(); start(); tick();
 })();

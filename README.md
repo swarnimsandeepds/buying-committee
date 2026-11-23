@@ -26,6 +26,15 @@ Built at the Multiplayer AI Hackathon, Track 3: Grow with Agents.
 
 Bruin is the agents' shared memory and the source of the ledger, the adaptive questions and the final feedback.
 
+## How BAND is used
+
+Dana, Raj and Maya are each a BAND remote agent. Every session opens a BAND room with the three of them and the human owner.
+
+1. The agents post their questions, the vendor's answers, their arguments and their votes to each other in the room, so a human can watch the committee work live in BAND.
+2. Before an agent argues or votes, it reads what its colleagues addressed to it on BAND and uses that in its decision.
+
+Turn it on by adding the three agent keys to `.env` (`BAND_CFO_KEY`, `BAND_CTO_KEY`, `BAND_USER_KEY`). Without them the app runs the same, minus the room.
+
 ## Run it
 
 ```
@@ -47,7 +56,7 @@ Check the pipeline on its own: `bruin validate pipeline` then `bruin run pipelin
 
 ## Files
 
-- `server.js`: agents, LLM calls, ledger, Bruin calls
+- `server.js`: agents, LLM calls, ledger, Bruin calls, BAND room
 - `public/index.html`: 3D room, voices, ledger UI
 - `pipeline/`: Bruin pipeline (SQL assets with checks)
 - `.bruin.yml`: local DuckDB connection (no secrets)

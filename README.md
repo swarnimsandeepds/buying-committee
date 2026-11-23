@@ -42,6 +42,12 @@ Right after the pitch, Raj picks the vendor's most checkable claim and searches 
 
 Turn it on by adding `TELEM_API_KEY` to `.env`.
 
+## How Glasser is used
+
+While Raj checks a claim on the web, Dana checks the money side through Glasser: a market search for price and ROI benchmarks, plus a company profile (size, revenue, funding) for any real company the pitch leans on. Her findings go into the ledger with sources, into the BAND room, and into her own questions and vote.
+
+Turn it on by adding `GLASSER_API_KEY` to `.env`.
+
 ## Run it
 
 ```

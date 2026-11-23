@@ -236,7 +236,7 @@ function bandMirror(ev) {
   else if (ev.type === 'question') bandPost(ev.agent, `My question to the vendor (${ev.topic}): ${ev.text} Why: ${ev.reason || ''}`);
   else if (ev.type === 'answer') bandPost(asker, 'The vendor answered me: ' + ev.text);
   else if (ev.type === 'insight') bandPost('cfo', 'Pipeline update. ' + ev.text);
-  else if (ev.type === 'research') bandPost('cto', `I checked the web. ${ev.text} ${ev.reason || ''}`);
+  else if (ev.type === 'research') bandPost(ev.agent || 'cto', `I did some checking. ${ev.text} ${ev.reason || ''}`);
   else if (ev.type === 'deliberation') bandPost(ev.agent, `${ev.text} (${ev.reason || ''})`);
   else if (ev.type === 'vote') bandPost(ev.agent, `My vote: ${ev.topic}. ${ev.text}`);
   else if (ev.type === 'verdict') bandPost('cfo', 'Verdict: ' + ev.text);
@@ -266,27 +266,83 @@ async function telemSearch(query) {
   }
   return out.slice(0, 4);
 }
+// ---------- Glasser (optional) ----------
+// Market and company data for Dana. One search for a price or ROI benchmark, plus company facts
+// (size, revenue, funding) for any real company the pitch leans on.
+const GLASSER_URL = (process.env.GLASSER_BASE_URL || 'https://api.glasser.ai').replace(/\/$/, '');
+const glasser = { status: process.env.GLASSER_API_KEY ? 'ready' : 'off' };
+async function glasserPost(pathname, body) {
+  const r = await fetch(GLASSER_URL + pathname, {
+    method: 'POST', signal: AbortSignal.timeout(25000),
+    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.GLASSER_API_KEY, 'idempotency-key': crypto.randomUUID() },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`Glasser ${pathname} -> ${r.status} ${JSON.stringify(j.error || j).slice(0, 200)}`);
+  return j;
+}
+async function glasserCheck(pickd) {
+  const out = { results: [], company: null };
+  const jobs = [glasserPost('/v1/solutions/gtm/web_research', { action: 'search', query: String(pickd.cost_query).slice(0, 200), limit: 4 })
+    .then((j) => { out.results = ((j.output && j.output.results) || []).slice(0, 3).map((x) => ({ title: String(x.title || x.url).slice(0, 120), url: x.url, summary: String(x.snippet || '').replace(/\s+/g, ' ').slice(0, 300) })); })];
+  const dom = String(pickd.company_domain || '').toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(dom)) jobs.push(glasserPost('/v1/solutions/gtm/company_intelligence', { domain: dom })
+    .then((j) => { if (j.result_status === 'success' && j.output && j.output.name) out.company = j.output; }));
+  const done = await Promise.allSettled(jobs);
+  const failed = done.filter((d) => d.status === 'rejected');
+  if (failed.length === done.length) throw failed[0].reason;
+  failed.forEach((f) => console.error('[glasser] ' + f.reason.message));
+  return out;
+}
+const money = (n) => (n >= 1e9 ? `$${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `$${Math.round(n / 1e6)}M` : `$${Math.round(n)}`);
+
+// Before any question: one planning call, then Raj's web check (Telem) and Dana's market check (Glasser) run side by side.
 async function research(pitch) {
-  if (telem.status === 'off') return null;
-  const raj = agentById.cto;
-  try {
-    const pickd = await llmJSON(raj, `The vendor just pitched: "${pitch}"\n\nBefore the committee questions them, you will check ONE thing on the live web. Pick the claim that matters most to the business case and that outsiders can verify: prefer a number (a time saving, a price level, an adoption or payback benchmark) over a certification or compliance badge. Write one web search query for it.
-Return JSON: {"claim":"<the vendor's claim, max 14 words>","query":"<web search query, max 12 words>"}`,
-      () => ({ claim: firstWords(pitch, 12), query: firstWords(pitch, 10) + ' industry benchmark' }));
-    const results = await telemSearch(String(pickd.query).slice(0, 200));
-    telem.status = 'ready';
-    if (!results.length) return null;
-    session.research = `Raj checked the vendor's claim "${pickd.claim}" on the live web (via Telem search, query: "${pickd.query}"). Findings:\n` +
-      results.map((x, i) => `${i + 1}. ${x.title}: ${x.summary} (${x.url})`).join('\n');
-    return logEvent({ type: 'research', agent: 'cto', topic: 'credibility', quote: String(pickd.claim).slice(0, 160),
-      text: `Checked the web for "${pickd.query}". Top sources: ${results.map((x) => x.title).join(' | ')}`.slice(0, 600),
-      reason: `Telem search, ${results.length} sources. ${results[0].summary.slice(0, 160)} (${results[0].url})` });
-  } catch (e) { telem.status = 'error'; console.error('[telem] ' + e.message); return null; }
+  if (telem.status === 'off' && glasser.status === 'off') return [];
+  const pickd = await llmJSON(agentById.cto, `The vendor just pitched: "${pitch}"\n\nBefore the committee questions them, the committee checks two things outside the room.
+1. Raj checks ONE claim on the live web. Pick the claim that matters most to the business case and that outsiders can verify: prefer a number (a time saving, an adoption or payback benchmark) over a certification or compliance badge.
+2. Dana checks the money side in a market data service: what tools like this normally cost, or what return buyers normally see. If the pitch leans on a real, well known company (a platform it integrates with or a named customer), give that company's website domain so she can look up its size; if there is none, or it is invented, use null.
+Return JSON: {"claim":"<the vendor's claim, max 14 words>","query":"<web search query for Raj, max 12 words>","cost_query":"<search query for Dana on price or ROI benchmarks, max 12 words>","company_domain":"<domain like example.com, or null>"}`,
+    () => ({ claim: firstWords(pitch, 12), query: firstWords(pitch, 10) + ' industry benchmark', cost_query: 'sales software price per seat benchmark', company_domain: null }));
+  const jobs = [];
+  if (telem.status !== 'off') jobs.push((async () => {
+    try {
+      const results = await telemSearch(String(pickd.query).slice(0, 200));
+      telem.status = 'ready';
+      if (!results.length) return null;
+      session.research = `Raj checked the vendor's claim "${pickd.claim}" on the live web (via Telem search, query: "${pickd.query}"). Findings:\n` +
+        results.map((x, i) => `${i + 1}. ${x.title}: ${x.summary} (${x.url})`).join('\n');
+      return logEvent({ type: 'research', agent: 'cto', topic: 'credibility', quote: String(pickd.claim).slice(0, 160),
+        text: `Telem web search for "${pickd.query}". Top sources: ${results.map((x) => x.title).join(' | ')}`.slice(0, 600),
+        reason: `Telem search, ${results.length} sources. ${results[0].summary.slice(0, 160)} (${results[0].url})` });
+    } catch (e) { telem.status = 'error'; console.error('[telem] ' + e.message); return null; }
+  })());
+  if (glasser.status !== 'off') jobs.push((async () => {
+    try {
+      const g = await glasserCheck(pickd);
+      glasser.status = 'ready';
+      const c = g.company;
+      const facts = c ? `${c.name}: ${[c.industry, c.employees && `${c.employees.toLocaleString('en-US')} employees`, c.revenue_usd && `revenue about ${money(c.revenue_usd)}`, c.total_funding_usd && `funding ${money(c.total_funding_usd)}`, c.founded_year && `founded ${c.founded_year}`, [c.city, c.country].filter(Boolean).join(', ')].filter(Boolean).join(', ')}` : '';
+      if (!g.results.length && !facts) return null;
+      session.finance = `Dana checked the money side in Glasser market data (query: "${pickd.cost_query}").` +
+        (g.results.length ? ` Benchmarks:\n${g.results.map((x, i) => `${i + 1}. ${x.title}: ${x.summary} (${x.url})`).join('\n')}` : '') +
+        (facts ? `\nCompany facts from Glasser: ${facts}.` : '');
+      return logEvent({ type: 'research', agent: 'cfo', topic: 'cost', quote: String(pickd.cost_query).slice(0, 160),
+        text: `Glasser market data for "${pickd.cost_query}".${g.results.length ? ` Top sources: ${g.results.map((x) => x.title).join(' | ')}.` : ''}${facts ? ` Company check: ${facts}.` : ''}`.slice(0, 700),
+        reason: `Glasser, ${g.results.length} benchmark source${g.results.length === 1 ? '' : 's'}${c ? ' and one company profile' : ''}.${g.results[0] ? ` ${g.results[0].summary.slice(0, 150)} (${g.results[0].url})` : ''}` });
+    } catch (e) { glasser.status = 'error'; console.error('[glasser] ' + e.message); return null; }
+  })());
+  return (await Promise.all(jobs)).filter(Boolean);
 }
 // Only Raj (who ran the search) carries the findings, plus whoever asks the first question.
 // Everyone is told to raise it once at most, so one web finding does not take over the session.
-const researchNote = (agentId, first) => (session.research && (agentId === 'cto' || first)
-  ? `\n${session.research}\nIf this matters, raise it ONCE, briefly. If it has already come up in the conversation, do not repeat it: move on to your own concerns.\n` : '');
+const researchNote = (agentId, first) => {
+  const once = 'If this matters, raise it ONCE, briefly. If it has already come up in the conversation, do not repeat it: move on to your own concerns.';
+  let n = '';
+  if (session.research && (agentId === 'cto' || first)) n += `\n${session.research}\n${once}\n`;
+  if (session.finance && (agentId === 'cfo' || first)) n += `\n${session.finance}\n${once}\n`;
+  return n;
+};
 
 // ---------- LLM ----------
 function claudeCli(system, user) {
@@ -430,7 +486,7 @@ function committeeDecided() {
 }
 
 async function handlePitch(text) {
-  session = { id: crypto.randomUUID(), seq: 0, events: [], turn: 0, step: 0, insight: null, pending: null, leanings: {}, research: null, telemSession: null };
+  session = { id: crypto.randomUUID(), seq: 0, events: [], turn: 0, step: 0, insight: null, pending: null, leanings: {}, research: null, finance: null, telemSession: null };
   bandOpenRoom();
   logEvent({ type: 'pitch', text });
   // Long term memory: what earlier sessions looked like, read before anyone speaks.
@@ -438,7 +494,7 @@ async function handlePitch(text) {
   const memory = before.length ? `Committee memory: in earlier sessions this vendor was weakest on ${before.slice(0, 2).map((h) => h.topic).join(' and ')}.` : '';
   const [found, ...results] = await Promise.all([research(text), ...AGENTS.map((a) => evaluate(a, text, memory))]);
   const events = results.flat();
-  if (found) events.push(found);
+  events.push(...(found || []));
   await refreshInsight();
   const ie = insightEvent(); if (ie) events.push(ie);
   events.push(await askQuestion(pickAsker()));
@@ -556,7 +612,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/api/')) {
     try {
       if (url.pathname === '/api/status') {
-        return send(res, 200, { maxQuestions: QA_TURNS, provider: PROVIDER, model: MODEL, bruin: bruinStatus, band: band.status, telem: telem.status, bandRoom: band.room, agents: AGENTS.map(({ id, name, role, cares }) => ({ id, name, role, cares })), topics: TOPICS, pastSessions: new Set(allEvents.map((e) => e.session_id)).size });
+        return send(res, 200, { maxQuestions: QA_TURNS, provider: PROVIDER, model: MODEL, bruin: bruinStatus, band: band.status, telem: telem.status, glasser: glasser.status, bandRoom: band.room, agents: AGENTS.map(({ id, name, role, cares }) => ({ id, name, role, cares })), topics: TOPICS, pastSessions: new Set(allEvents.map((e) => e.session_id)).size });
       }
       if (req.method !== 'POST') return send(res, 405, { error: 'POST only' });
       if (busy) return send(res, 429, { error: 'The committee is still thinking.' });
@@ -590,5 +646,6 @@ Promise.all([findBruin(), bandInit()]).then(() => {
     console.log(`  Bruin: ${bruinBin ? 'found at ' + bruinBin : 'NOT FOUND. Install it, then restart. Using local fallback for now.'}\n`);
     console.log(`  BAND:  ${band.status === 'ready' ? 'connected as ' + AGENTS.map((a) => band.me[a.id].handle).join(', ') : band.status === 'off' ? 'off (add the three BAND_*_KEY values to .env to turn it on)' : 'ERROR, see above'}\n`);
     console.log(`  Telem: ${telem.status === 'ready' ? 'on (live web fact-check)' : 'off (add TELEM_API_KEY to .env to turn it on)'}\n`);
+    console.log(`  Glasser: ${glasser.status === 'ready' ? 'on (market and company data)' : 'off (add GLASSER_API_KEY to .env to turn it on)'}\n`);
   });
 });

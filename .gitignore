@@ -10,4 +10,4 @@ logs/*.log
 __pycache__/
 *.py[cod]
 logs/queries
-.bruin.yml
+.bruin.ymlserver.log

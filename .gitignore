@@ -1,0 +1,13 @@
+node_modules
+.env
+data/*.db
+data/*.db.wal
+data/events.jsonl
+logs
+
+logs/runs
+logs/*.log
+__pycache__/
+*.py[cod]
+logs/queries
+.bruin.yml

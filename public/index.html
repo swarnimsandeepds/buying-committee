@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Buying Committee</title>
+<style>
+  :root { --bg:#0d1017; --panel:#151a24; --line:#262d3b; --text:#e8ecf3; --dim:#8b95a8; --cfo:#e0a23c; --cto:#4aa8ff; --user:#e86a9a; --good:#3ecf8e; --bad:#ff5d5d; --bruin:#f4b740; }
+  * { box-sizing: border-box; }
+  html, body { height:100%; margin:0; background:var(--bg); color:var(--text); font:14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #app { display:grid; grid-template-columns: 1fr 400px; height:100vh; }
+  #stage { position:relative; overflow:hidden; min-width:0; }
+  canvas { display:block; width:100%; height:100%; }
+  #top { position:absolute; top:14px; left:18px; right:18px; display:flex; justify-content:space-between; align-items:flex-start; pointer-events:none; }
+  #top h1 { margin:0; font-size:19px; letter-spacing:.3px; }
+  #top .sub { color:var(--dim); font-size:12px; }
+  .pill { display:inline-block; padding:3px 9px; border-radius:99px; border:1px solid var(--line); background:#0d1017cc; font-size:11px; color:var(--dim); margin-left:6px; }
+  .pill.ok { color:var(--good); border-color:#215c44; } .pill.warn { color:var(--bruin); border-color:#6b5320; }
+  #subtitle { position:absolute; left:50%; transform:translateX(-50%); bottom:168px; max-width:78%; text-align:center; font-size:20px; line-height:1.35; padding:10px 18px; border-radius:12px; background:#0b0e14e6; border:1px solid var(--line); opacity:0; transition:opacity .2s; }
+  #subtitle.on { opacity:1; }
+  #subtitle b { display:block; font-size:12px; letter-spacing:1px; text-transform:uppercase; margin-bottom:2px; }
+  #dock { position:absolute; left:18px; right:18px; bottom:16px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px; }
+  #prompt { color:var(--dim); font-size:12.5px; margin-bottom:8px; min-height:18px; }
+  #prompt strong { color:var(--text); }
+  #row { display:flex; gap:8px; }
+  textarea { flex:1; height:74px; resize:none; background:#0d1017; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:10px; font:inherit; font-size:15px; }
+  textarea:focus { outline:1px solid #3b4a66; }
+  button { font:inherit; border-radius:10px; border:1px solid var(--line); background:#1d2431; color:var(--text); padding:0 16px; cursor:pointer; }
+  button:hover:not(:disabled) { background:#273042; } button:disabled { opacity:.45; cursor:default; }
+  #send { background:#2b6cff; border-color:#2b6cff; font-weight:600; min-width:120px; }
+  #send:hover:not(:disabled) { background:#3d7aff; }
+  #mic.on { background:#7a1f1f; border-color:#b83535; }
+  #side { border-left:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; min-height:0; }
+  #side h2 { margin:0; padding:14px 16px 8px; font-size:13px; letter-spacing:1px; text-transform:uppercase; color:var(--dim); }
+  #insight { margin:0 12px 10px; padding:12px; border:1px solid #6b5320; background:#231c0c; border-radius:12px; }
+  #insight .tag { font-size:10.5px; letter-spacing:1px; text-transform:uppercase; color:var(--bruin); display:flex; justify-content:space-between; }
+  #insight .big { font-size:18px; font-weight:700; margin:4px 0 2px; }
+  #insight .meta { font-size:11.5px; color:var(--dim); }
+  #grid { width:100%; border-collapse:collapse; margin-top:8px; font-size:11.5px; }
+  #grid th, #grid td { padding:3px 4px; text-align:center; border:1px solid #3a3115; }
+  #grid th { color:var(--dim); font-weight:500; } #grid td:first-child, #grid th:first-child { text-align:left; }
+  #ledger { flex:1; overflow-y:auto; padding:0 12px 14px; }
+  .ev { border:1px solid var(--line); border-left-width:3px; border-radius:8px; padding:8px 10px; margin-bottom:7px; background:#111621; animation:pop .25s ease-out; }
+  @keyframes pop { from { transform:translateY(6px); opacity:0; } }
+  .ev .h { display:flex; justify-content:space-between; font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.6px; }
+  .ev .t { margin-top:3px; } .ev .r { margin-top:3px; color:var(--dim); font-size:12.5px; }
+  .ev q { color:#c9d2e3; font-style:italic; }
+  .score { font-weight:700; }
+  #overlay { position:absolute; inset:0; background:#080a0fee; display:none; align-items:center; justify-content:center; padding:24px; overflow:auto; }
+  #overlay.on { display:flex; }
+  #card { width:min(860px,100%); background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:26px 28px; }
+  #card .v { font-size:54px; font-weight:800; letter-spacing:1px; line-height:1; }
+  #card h3 { margin:18px 0 8px; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:var(--dim); }
+  .votes { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .vote, .claim { border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:#111621; }
+  .claim { margin-bottom:8px; }
+  .bars div { display:flex; align-items:center; gap:8px; margin:4px 0; font-size:12.5px; }
+  .bars span.l { width:86px; color:var(--dim); } .bars span.b { height:9px; border-radius:5px; } .bars span.n { width:34px; }
+  #again { margin-top:18px; height:42px; background:#2b6cff; border-color:#2b6cff; font-weight:600; }
+  @media (max-width: 980px) { #app { grid-template-columns: 1fr 320px; } #subtitle { font-size:16px; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="c"></canvas>
+    <div id="top">
+      <div><h1>The Buying Committee</h1><div class="sub">Pitch three AI buyers. They question you, argue with each other, and vote.</div></div>
+      <div><span class="pill" id="pLLM">LLM</span><span class="pill" id="pBruin">Bruin</span><span class="pill" id="pMem">memory</span></div>
+    </div>
+    <div id="subtitle"></div>
+    <div id="dock">
+      <div id="prompt"></div>
+      <div id="row">
+        <textarea id="input" placeholder="Type here, or press Mic and talk."></textarea>
+        <button id="mic" title="Speak your answer">🎙 Mic</button>
+        <button id="mute" title="Toggle agent voices">🔊</button>
+        <button id="send">Deliver pitch</button>
+      </div>
+    </div>
+    <div id="overlay"><div id="card"></div></div>
+  </div>
+  <div id="side">
+    <h2>Decision ledger</h2>
+    <div id="insight">
+      <div class="tag"><span>Live pipeline insight</span><span id="iSrc">waiting</span></div>
+      <div class="big" id="iBig">No scores yet</div>
+      <div class="meta" id="iMeta">Every agent decision is written to the ledger, run through the Bruin pipeline, and read back by the agents before their next question.</div>
+      <table id="grid"></table>
+    </div>
+    <div id="ledger"></div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+const COLORS = { cfo: '#e0a23c', cto: '#4aa8ff', user: '#e86a9a' };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let AG = [], TOPICS = [], phase = 'pitch', muted = false, speakerId = null, thinking = false;
+
+// ---------------- 3D scene ----------------
+const canvas = $('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#0d1017');
+scene.fog = new THREE.Fog('#0d1017', 9, 20);
+const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 60);
+camera.position.set(0, 2.55, 6.4);
+const camTarget = new THREE.Vector3(0, 1.55, 0);
+let baseZ = 6.4;
+
+scene.add(new THREE.HemisphereLight('#aab8d8', '#1a1410', 1.1));
+const key = new THREE.DirectionalLight('#fff2dc', 1.6); key.position.set(3, 6, 5); key.castShadow = true; key.shadow.mapSize.set(1024, 1024); scene.add(key);
+const spot = new THREE.SpotLight('#ffffff', 0, 12, 0.5, 0.6, 1); spot.position.set(0, 5.5, 3.5); scene.add(spot); scene.add(spot.target);
+
+const mat = (c, o = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.75, ...o });
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), mat('#171c27')); floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+const wall = new THREE.Mesh(new THREE.PlaneGeometry(40, 12), mat('#121722')); wall.position.set(0, 6, -4.2); scene.add(wall);
+for (let i = -3; i <= 3; i++) { // window strips behind the committee
+  const w = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 3.2), new THREE.MeshBasicMaterial({ color: i % 2 ? '#1c2a44' : '#22345a' }));
+  w.position.set(i * 1.9, 3.1, -4.15); scene.add(w);
+}
+const table = new THREE.Mesh(new THREE.BoxGeometry(7.6, 0.14, 1.7), mat('#3a2a1e', { roughness: 0.4 })); table.position.set(0, 1.0, 1.05); table.castShadow = table.receiveShadow = true; scene.add(table);
+const tbase = new THREE.Mesh(new THREE.BoxGeometry(6.6, 1.0, 0.25), mat('#2a1f17')); tbase.position.set(0, 0.5, 1.5); scene.add(tbase);
+
+function labelSprite() {
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 160;
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  sp.scale.set(1.55, 0.485, 1); sp.userData = { cv, tex };
+  return sp;
+}
+function drawLabel(ch) {
+  const { cv, tex } = ch.label.userData, g = cv.getContext('2d');
+  g.clearRect(0, 0, 512, 160);
+  g.fillStyle = 'rgba(11,14,20,.88)'; g.beginPath(); g.roundRect(6, 6, 500, 148, 22); g.fill();
+  g.strokeStyle = ch.color; g.lineWidth = 4; g.stroke();
+  g.fillStyle = '#fff'; g.font = '700 44px system-ui, sans-serif'; g.fillText(ch.a.name, 28, 58);
+  const nameW = g.measureText(ch.a.name).width;
+  g.fillStyle = ch.color; g.font = '600 24px system-ui, sans-serif'; g.fillText(ch.a.role.toUpperCase(), 28 + nameW + 16, 56);
+  const s = ch.score;
+  g.fillStyle = '#2a3140'; g.beginPath(); g.roundRect(28, 92, 350, 28, 14); g.fill();
+  if (s != null) {
+    g.fillStyle = s >= 6.5 ? '#3ecf8e' : s >= 4.5 ? '#f4b740' : '#ff5d5d';
+    g.beginPath(); g.roundRect(28, 92, Math.max(28, 35 * s), 28, 14); g.fill();
+  }
+  g.fillStyle = '#fff'; g.font = '700 32px system-ui, sans-serif'; g.fillText(s == null ? '' : s.toFixed(1), 396, 119);
+  tex.needsUpdate = true;
+}
+
+const chars = {};
+function buildChar(a, x, z, skin, hair) {
+  const color = COLORS[a.id];
+  const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = Math.atan2(-x, 6.4 - z) * 0.55;
+  const torso = new THREE.Group(); torso.position.y = 1.05; g.add(torso);
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.46, 0.62, 6, 18), mat(color)); body.position.y = 0.62; body.castShadow = true; torso.add(body);
+  const collar = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.34, 4), mat('#f2f2f2')); collar.position.set(0, 1.0, 0.36); collar.rotation.x = Math.PI; torso.add(collar);
+  const neck = new THREE.Group(); neck.position.y = 1.36; torso.add(neck);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.36, 28, 22), mat(skin, { roughness: 0.6 })); head.position.y = 0.3; head.castShadow = true; neck.add(head);
+  const hairM = new THREE.Mesh(new THREE.SphereGeometry(0.38, 28, 22, 0, Math.PI * 2, 0, Math.PI * 0.52), mat(hair)); hairM.position.y = 0.33; hairM.rotation.x = -0.25; neck.add(hairM);
+  const eyeG = new THREE.SphereGeometry(0.045, 12, 12), eyeMat = mat('#15171c');
+  const eL = new THREE.Mesh(eyeG, eyeMat), eR = new THREE.Mesh(eyeG, eyeMat); eL.position.set(-0.13, 0.36, 0.32); eR.position.set(0.13, 0.36, 0.32); neck.add(eL, eR);
+  const browG = new THREE.BoxGeometry(0.13, 0.025, 0.03);
+  const bL = new THREE.Mesh(browG, eyeMat), bR = new THREE.Mesh(browG, eyeMat); bL.position.set(-0.13, 0.46, 0.32); bR.position.set(0.13, 0.46, 0.32); neck.add(bL, bR);
+  const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.035, 0.04), mat('#5a1d24')); mouth.position.set(0, 0.17, 0.335); neck.add(mouth);
+  const arms = [-1, 1].map((s) => {
+    const p = new THREE.Group(); p.position.set(s * 0.5, 0.95, 0.05); torso.add(p);
+    const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.62, 4, 12), mat(color)); m.position.y = -0.36; m.castShadow = true; p.add(m);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.115, 14, 12), mat(skin)); hand.position.y = -0.76; p.add(hand);
+    p.rotation.x = -1.12; p.rotation.z = s * -0.28;
+    return p;
+  });
+  const label = labelSprite(); label.position.set(0, 3.2, 0); g.add(label);
+  scene.add(g);
+  const ch = { a, g, torso, neck, mouth, arms, brows: [bL, bR], label, color, score: null, yaw: 0, pitch: 0, lean: 0, nodT: 0, shakeT: 0, seed: Math.random() * 10 };
+  drawLabel(ch);
+  return ch;
+}
+
+function setScore(id, s) { const ch = chars[id]; if (!ch || s == null) return; ch.score = s; drawLabel(ch); }
+
+function resize() {
+  const r = $('stage').getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / r.height; camera.updateProjectionMatrix();
+  baseZ = Math.max(6.4, 3.75 / (Math.tan(THREE.MathUtils.degToRad(21)) * camera.aspect));
+}
+addEventListener('resize', resize);
+
+const clock = { last: performance.now(), elapsedTime: 0, getDelta() { const n = performance.now(), d = (n - this.last) / 1000; this.last = n; this.elapsedTime += Math.min(d, 0.05); return d; } };
+const tmp = new THREE.Vector3();
+function tick() {
+  const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+  const sp = speakerId && chars[speakerId];
+  for (const ch of Object.values(chars)) {
+    const speaking = ch === sp;
+    // where to look: at the speaker, or at the vendor (camera) when speaking or when the vendor talks
+    let ty = 0;
+    if (sp && !speaking) { tmp.copy(sp.g.position).sub(ch.g.position); ty = Math.atan2(tmp.x, tmp.z) - ch.g.rotation.y; }
+    else { tmp.copy(camera.position).sub(ch.g.position); ty = Math.atan2(tmp.x, tmp.z) - ch.g.rotation.y; }
+    ty = Math.max(-1.1, Math.min(1.1, ty));
+    let extraYaw = 0, extraPitch = 0;
+    if (ch.nodT > 0) { ch.nodT -= dt; extraPitch = Math.sin(ch.nodT * 14) * 0.22; }
+    if (ch.shakeT > 0) { ch.shakeT -= dt; extraYaw = Math.sin(ch.shakeT * 16) * 0.3; }
+    if (thinking && !sp) { extraPitch += 0.12 + Math.sin(t * 1.3 + ch.seed) * 0.04; extraYaw += Math.sin(t * 0.7 + ch.seed) * 0.12; }
+    ch.yaw += (ty - ch.yaw) * Math.min(1, dt * 5);
+    ch.neck.rotation.y = ch.yaw * 0.8 + extraYaw;
+    ch.neck.rotation.x = extraPitch + (speaking ? Math.sin(t * 5 + ch.seed) * 0.05 : 0);
+    ch.torso.rotation.y = ch.yaw * 0.2;
+    ch.lean += ((speaking ? 0.2 : 0) - ch.lean) * Math.min(1, dt * 4);
+    ch.torso.rotation.x = ch.lean + Math.sin(t * 1.4 + ch.seed) * 0.012;
+    ch.torso.position.y = 1.05 + Math.sin(t * 1.6 + ch.seed) * 0.012;
+    ch.mouth.scale.y = speaking ? 1 + Math.abs(Math.sin(t * 17 + ch.seed)) * 2.2 : 1;
+    const mood = ch.score == null ? 0 : (5 - ch.score) / 5; // frown when unimpressed
+    ch.brows[0].rotation.z = -mood * 0.35; ch.brows[1].rotation.z = mood * 0.35;
+    ch.arms.forEach((p, i) => {
+      const s = i ? 1 : -1;
+      const gx = speaking ? -1.45 + Math.sin(t * 3.1 + i * 1.7 + ch.seed) * 0.4 : -1.12;
+      const gz = speaking ? s * (-0.1 + Math.sin(t * 2.3 + i) * 0.22) : s * -0.28;
+      p.rotation.x += (gx - p.rotation.x) * Math.min(1, dt * 6);
+      p.rotation.z += (gz - p.rotation.z) * Math.min(1, dt * 6);
+    });
+  }
+  if (sp) { spot.target.position.copy(sp.g.position).setY(2.2); spot.intensity += (60 - spot.intensity) * 0.08; } else spot.intensity *= 0.92;
+  const cx = sp ? sp.g.position.x * 0.22 : 0;
+  camera.position.x += (cx - camera.position.x) * 0.03;
+  camera.position.z += ((sp ? baseZ - 0.5 : baseZ) - camera.position.z) * 0.03;
+  camera.lookAt(camTarget.x + camera.position.x * 0.5, camTarget.y, 0);
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+
+// ---------------- Voice ----------------
+let voices = [];
+function loadVoices() { voices = (speechSynthesis.getVoices() || []).filter((v) => /^en/i.test(v.lang)); }
+if ('speechSynthesis' in window) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+const VOICE = { cfo: { want: /samantha|zira|female|aria|jenny|google us english/i, pitch: 0.85, rate: 1.02 }, cto: { want: /daniel|david|male|guy|google uk english male|alex/i, pitch: 0.7, rate: 1.0 }, user: { want: /karen|moira|hazel|sonia|libby|google uk english female|victoria/i, pitch: 1.25, rate: 1.08 } };
+function speak(id, text) {
+  const a = AG.find((x) => x.id === id);
+  $('subtitle').innerHTML = `<b style="color:${COLORS[id]}">${esc(a.name)} · ${esc(a.role)}</b>${esc(text)}`;
+  $('subtitle').classList.add('on');
+  speakerId = id;
+  const est = Math.max(1600, text.length * 62);
+  return new Promise((resolve) => {
+    let done = false;
+    const fin = () => { if (done) return; done = true; speakerId = null; $('subtitle').classList.remove('on'); setTimeout(resolve, 220); };
+    if (muted || !('speechSynthesis' in window)) return setTimeout(fin, est);
+    try {
+      const u = new SpeechSynthesisUtterance(text), v = VOICE[id];
+      const used = Object.keys(VOICE).indexOf(id);
+      u.voice = voices.find((x) => v.want.test(x.name)) || voices[used % Math.max(1, voices.length)] || null;
+      u.pitch = v.pitch; u.rate = v.rate;
+      u.onend = fin; u.onerror = fin;
+      speechSynthesis.cancel(); speechSynthesis.speak(u);
+      setTimeout(fin, est * 1.6 + 2500); // safety net: some browsers never fire onend
+    } catch (_) { setTimeout(fin, est); }
+  });
+}
+
+let rec = null, recOn = false, baseText = '';
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+function micStop() { if (rec && recOn) { recOn = false; try { rec.stop(); } catch (_) {} } $('mic').classList.remove('on'); $('mic').textContent = '🎙 Mic'; }
+function micStart() {
+  if (!SR) return alert('Speech input needs Chrome or Edge. You can type instead.');
+  rec = new SR(); rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
+  baseText = $('input').value ? $('input').value.trim() + ' ' : '';
+  rec.onresult = (e) => { let s = ''; for (const r of e.results) s += r[0].transcript; $('input').value = baseText + s; };
+  rec.onend = () => { if (recOn) { baseText = $('input').value.trim() + ' '; try { rec.start(); } catch (_) {} } };
+  rec.onerror = (e) => { if (e.error === 'not-allowed') { micStop(); alert('Microphone permission was blocked. Allow it in the address bar, or type instead.'); } };
+  recOn = true; rec.start(); $('mic').classList.add('on'); $('mic').textContent = '■ Stop';
+}
+$('mic').onclick = () => (recOn ? micStop() : micStart());
+$('mute').onclick = () => { muted = !muted; $('mute').textContent = muted ? '🔇' : '🔊'; if (muted && 'speechSynthesis' in window) speechSynthesis.cancel(); };
+
+// ---------------- Ledger ----------------
+const LABEL = { claim_score: 'Scored a claim', reaction: 'Reacted', question: 'Chose a question', insight: 'Pipeline insight', deliberation: 'Argued', vote: 'Voted', verdict: 'Verdict', pitch: 'Pitch', answer: 'Answer' };
+function addLedger(ev) {
+  const a = AG.find((x) => x.id === ev.agent);
+  const col = a ? COLORS[a.id] : ev.type === 'insight' ? 'var(--bruin)' : '#6b7690';
+  const d = document.createElement('div'); d.className = 'ev'; d.style.borderLeftColor = col;
+  const sc = ev.type === 'claim_score' ? `<span class="score" style="color:${ev.score >= 6.5 ? 'var(--good)' : ev.score >= 4.5 ? 'var(--bruin)' : 'var(--bad)'}">${ev.score}/10 · ${esc(ev.topic)}</span>` : ev.type === 'question' ? `<span>${esc(ev.topic)}</span>` : ev.type === 'vote' ? `<span class="score" style="color:${ev.topic === 'BUY' ? 'var(--good)' : 'var(--bad)'}">${esc(ev.topic).replace('_', ' ')}</span>` : '';
+  let body = '';
+  if (ev.type === 'claim_score') body = `<div class="t"><q>${esc(ev.quote)}</q></div>`;
+  else if (ev.text) body = `<div class="t">${esc(ev.text)}</div>`;
+  d.innerHTML = `<div class="h"><span style="color:${col}">${a ? esc(a.name) + ' · ' : ''}${LABEL[ev.type] || ev.type}</span>${sc}</div>${body}${ev.reason ? `<div class="r">Why: ${esc(ev.reason)}</div>` : ''}`;
+  $('ledger').prepend(d);
+}
+function heat(v) { if (v == null) return ''; const c = v >= 6.5 ? '62,207,142' : v >= 4.5 ? '244,183,64' : '255,93,93'; return `background:rgba(${c},.28)`; }
+function renderInsight(i) {
+  if (!i || !i.weakest) return;
+  $('iSrc').textContent = i.source === 'bruin' ? 'Powered by Bruin' : 'Local fallback (Bruin not running)';
+  $('iBig').innerHTML = `Weakest: ${esc(i.weakest.topic)} · ${i.weakest.avg_score}/10`;
+  $('iMeta').textContent = `${i.rows} ledger rows processed in ${i.ms} ms. Next question targets this topic.` + (i.hist.length ? ` Memory from past sessions: weakest on ${i.hist[0].topic}.` : '');
+  const topics = TOPICS.filter((t) => i.table.some((r) => r.topic === t));
+  $('grid').innerHTML = `<tr><th></th>${topics.map((t) => `<th>${t.slice(0, 6)}</th>`).join('')}</tr>` + AG.map((a) => `<tr><td style="color:${COLORS[a.id]}">${a.name}</td>${topics.map((t) => { const r = i.table.find((x) => x.agent === a.id && x.topic === t); return `<td style="${heat(r && r.avg_score)}">${r ? r.avg_score : ''}</td>`; }).join('')}</tr>`).join('');
+}
+
+// ---------------- Flow ----------------
+async function post(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'Request failed');
+  return j;
+}
+function setBusy(b, msg) {
+  thinking = b; $('send').disabled = b; $('input').disabled = b; $('mic').disabled = b;
+  if (msg) $('prompt').innerHTML = msg;
+}
+async function play(res) {
+  for (const ev of res.events) {
+    addLedger(ev);
+    if (ev.type === 'claim_score') {
+      const ch = chars[ev.agent];
+      if (ch) { if (ev.score >= 6) ch.nodT = 1.1; else if (ev.score < 4.5) ch.shakeT = 1.1; }
+      const st = res.agents.find((x) => x.id === ev.agent); if (st) setScore(st.id, st.score);
+      await sleep(350);
+    }
+    if (ev.type === 'insight') { renderInsight(res.insight); await sleep(500); }
+    if (ev.say) { thinking = false; await speak(ev.agent, ev.say); }
+  }
+  for (const st of res.agents || []) setScore(st.id, st.score);
+}
+let qCount = 0;
+async function submit() {
+  const text = $('input').value.trim();
+  if (!text) return $('input').focus();
+  micStop();
+  addLedger({ type: phase === 'pitch' ? 'pitch' : 'answer', text });
+  $('input').value = '';
+  setBusy(true, 'The committee is thinking…');
+  try {
+    const res = await post(phase === 'pitch' ? '/api/pitch' : '/api/answer', { text });
+    if (phase === 'pitch') { phase = 'qa'; qCount = 0; }
+    await play(res);
+    if (res.done) return deliberate();
+    qCount++;
+    const a = AG.find((x) => x.id === res.pending.agent);
+    setBusy(false, `<strong style="color:${COLORS[a.id]}">${esc(a.name)}</strong> asked (question ${qCount} of 6): ${esc(res.pending.question)}`);
+    $('send').textContent = 'Answer'; $('input').focus();
+  } catch (e) { setBusy(false, `<span style="color:var(--bad)">${esc(e.message)}</span>`); }
+}
+async function deliberate() {
+  phase = 'delib';
+  setBusy(true, 'You have left the room. The committee is deliberating…');
+  try {
+    for (;;) {
+      thinking = true;
+      const res = await post('/api/step');
+      await play(res);
+      if (res.verdict) { showVerdict(res.verdict); break; }
+    }
+  } catch (e) { setBusy(false, `<span style="color:var(--bad)">${esc(e.message)}</span>`); }
+}
+function showVerdict(v) {
+  thinking = false;
+  const buy = v.result === 'BUY';
+  for (const x of v.votes) { const ch = chars[x.agent]; if (ch) (x.vote === 'BUY' ? (ch.nodT = 2) : (ch.shakeT = 2)); }
+  $('card').innerHTML = `
+    <div style="color:var(--dim);font-size:12px;letter-spacing:1px;text-transform:uppercase">The committee has decided</div>
+    <div class="v" style="color:${buy ? 'var(--good)' : 'var(--bad)'}">${v.result}</div>
+    <div style="color:var(--dim);margin-top:6px">${v.buys} of ${v.total} voted to buy</div>
+    <h3>Votes</h3>
+    <div class="votes">${v.votes.map((x) => { const a = AG.find((y) => y.id === x.agent); return `<div class="vote" style="border-color:${COLORS[x.agent]}"><b style="color:${COLORS[x.agent]}">${esc(a.name)} · ${esc(a.role)}</b><div class="score" style="color:${x.vote === 'BUY' ? 'var(--good)' : 'var(--bad)'}">${x.vote.replace('_', ' ')}</div><div style="color:var(--dim);font-size:12.5px">${esc(x.reason)}</div></div>`; }).join('')}</div>
+    <h3>Your three weakest moments, with evidence</h3>
+    ${v.claims.map((c) => { const a = AG.find((y) => y.id === c.agent); return `<div class="claim"><span class="score" style="color:var(--bad)">${c.score}/10 · ${esc(c.topic)}</span> <span style="color:${COLORS[c.agent]}">scored by ${esc(a ? a.name : c.agent)}</span><div><q>${esc(c.quote)}</q></div><div style="color:var(--dim);font-size:12.5px">${esc(c.reason)}</div></div>`; }).join('') || '<div class="claim">No scored claims.</div>'}
+    <h3>Score by topic <span style="color:var(--bruin);text-transform:none;letter-spacing:0">(${v.source === 'bruin' ? 'from the Bruin pipeline' : 'local fallback'})</span></h3>
+    <div class="bars">${v.weak.map((w) => `<div><span class="l">${esc(w.topic)}</span><span class="b" style="width:${w.avg_score * 22}px;background:${w.avg_score >= 6.5 ? 'var(--good)' : w.avg_score >= 4.5 ? 'var(--bruin)' : 'var(--bad)'}"></span><span class="n">${w.avg_score}</span></div>`).join('')}</div>
+    <button id="again">Pitch again. They will remember this session.</button>`;
+  $('overlay').classList.add('on');
+  $('again').onclick = () => { $('overlay').classList.remove('on'); $('ledger').innerHTML = ''; for (const ch of Object.values(chars)) { ch.score = null; drawLabel(ch); } start(); };
+}
+function start() {
+  phase = 'pitch'; $('send').textContent = 'Deliver pitch';
+  setBusy(false, '<strong>Your turn.</strong> Pitch your product in about 60 seconds. Say what it is, who it is for, what it costs and why they should trust you.');
+}
+$('send').onclick = submit;
+$('input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(); });
+
+(async function init() {
+  const st = await (await fetch('/api/status')).json();
+  AG = st.agents; TOPICS = st.topics;
+  const pos = { cfo: [-2.3, 0.3], cto: [0, -0.15], user: [2.3, 0.3] };
+  const look = { cfo: ['#e9c4a0', '#3b2a22'], cto: ['#b98a62', '#15171c'], user: ['#f0d2b6', '#7a3b1c'] };
+  for (const a of AG) chars[a.id] = buildChar(a, pos[a.id][0], pos[a.id][1], look[a.id][0], look[a.id][1]);
+  $('pLLM').textContent = st.provider === 'mock' ? 'DEMO MODE · no API key' : `${st.provider} · ${st.model}`;
+  $('pLLM').className = 'pill ' + (st.provider === 'mock' ? 'warn' : 'ok');
+  $('pBruin').textContent = 'Bruin · ' + st.bruin; $('pBruin').className = 'pill ' + (st.bruin === 'ready' ? 'ok' : 'warn');
+  $('pMem').textContent = `memory · ${st.pastSessions} past session${st.pastSessions === 1 ? '' : 's'}`;
+  resize(); start(); tick();
+})();
+</script>
+</body>
+</html>

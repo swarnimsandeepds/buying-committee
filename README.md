@@ -35,6 +35,12 @@ Dana, Raj and Maya are each a BAND remote agent. Every session opens a BAND room
 
 Turn it on by adding the three agent keys to `.env` (`BAND_CFO_KEY`, `BAND_CTO_KEY`, `BAND_USER_KEY`). Without them the app runs the same, minus the room.
 
+## How Telem is used
+
+Right after the pitch, Raj picks the vendor's most checkable claim and searches the live web through Telem. What he finds goes into the ledger with its sources, into the BAND room, and into every later question, score, argument and vote. All searches for one pitch share a Telem session, so the research is one trace in the Telem console.
+
+Turn it on by adding `TELEM_API_KEY` to `.env`.
+
 ## Run it
 
 ```

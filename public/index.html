@@ -66,7 +66,7 @@
     <canvas id="c"></canvas>
     <div id="top">
       <div><h1>The Buying Committee</h1><div class="sub">Pitch three AI buyers. They question you, argue with each other, and vote.</div></div>
-      <div><span class="pill" id="pLLM">LLM</span><span class="pill" id="pBruin">Bruin</span><span class="pill" id="pBand" style="display:none">BAND</span><span class="pill" id="pMem">memory</span></div>
+      <div><span class="pill" id="pLLM">LLM</span><span class="pill" id="pBruin">Bruin</span><span class="pill" id="pBand" style="display:none">BAND</span><span class="pill" id="pTelem" style="display:none">Telem</span><span class="pill" id="pMem">memory</span></div>
     </div>
     <div id="subtitle"></div>
     <div id="dock">
@@ -278,7 +278,7 @@ $('mic').onclick = () => (recOn ? micStop() : micStart());
 $('mute').onclick = () => { muted = !muted; $('mute').textContent = muted ? '🔇' : '🔊'; if (muted && 'speechSynthesis' in window) speechSynthesis.cancel(); };
 
 // ---------------- Ledger ----------------
-const LABEL = { claim_score: 'Scored a claim', reaction: 'Reacted', question: 'Chose a question', insight: 'Pipeline insight', deliberation: 'Argued', vote: 'Voted', verdict: 'Verdict', pitch: 'Pitch', answer: 'Answer' };
+const LABEL = { claim_score: 'Scored a claim', reaction: 'Reacted', question: 'Chose a question', insight: 'Pipeline insight', deliberation: 'Argued', vote: 'Voted', verdict: 'Verdict', pitch: 'Pitch', answer: 'Answer', research: 'Checked the live web (Telem)' };
 function addLedger(ev) {
   const a = AG.find((x) => x.id === ev.agent);
   const col = a ? COLORS[a.id] : ev.type === 'insight' ? 'var(--bruin)' : '#6b7690';
@@ -391,6 +391,7 @@ $('input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.meta
   $('pLLM').className = 'pill ' + (st.provider === 'mock' ? 'warn' : 'ok');
   $('pBruin').textContent = 'Bruin · ' + st.bruin; $('pBruin').className = 'pill ' + (st.bruin === 'ready' ? 'ok' : 'warn');
   if (st.band && st.band !== 'off') { $('pBand').style.display = ''; $('pBand').textContent = 'BAND · ' + st.band; $('pBand').className = 'pill ' + (st.band === 'ready' ? 'ok' : 'warn'); }
+  if (st.telem && st.telem !== 'off') { $('pTelem').style.display = ''; $('pTelem').textContent = 'Telem · ' + st.telem; $('pTelem').className = 'pill ' + (st.telem === 'ready' ? 'ok' : 'warn'); }
   $('pMem').textContent = `memory · ${st.pastSessions} past session${st.pastSessions === 1 ? '' : 's'}`;
   resize(); start(); tick();
 })();

@@ -218,10 +218,54 @@ function bandMirror(ev) {
   else if (ev.type === 'question') bandPost(ev.agent, `My question to the vendor (${ev.topic}): ${ev.text} Why: ${ev.reason || ''}`);
   else if (ev.type === 'answer') bandPost(asker, 'The vendor answered me: ' + ev.text);
   else if (ev.type === 'insight') bandPost('cfo', 'Pipeline update. ' + ev.text);
+  else if (ev.type === 'research') bandPost('cto', `I checked the web. ${ev.text} ${ev.reason || ''}`);
   else if (ev.type === 'deliberation') bandPost(ev.agent, `${ev.text} (${ev.reason || ''})`);
   else if (ev.type === 'vote') bandPost(ev.agent, `My vote: ${ev.topic}. ${ev.text}`);
   else if (ev.type === 'verdict') bandPost('cfo', 'Verdict: ' + ev.text);
 }
+
+// ---------- Telem (optional) ----------
+// Live web research. Raj picks the most checkable claim in the pitch, searches the web through Telem,
+// and the committee uses what he finds. All calls of one pitch share a Telem session, so the whole
+// research trail shows up as one trace in the Telem console.
+const TELEM_URL = (process.env.TELEM_BASE_URL || 'https://router.telem.ai').replace(/\/$/, '');
+const telem = { status: process.env.TELEM_API_KEY ? 'ready' : 'off' };
+async function telemSearch(query) {
+  const body = { user_input: { query }, search: { num_results: 3 } };
+  if (session.telemSession) body.session_id = session.telemSession;
+  const r = await fetch(TELEM_URL + '/v1/search', {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.TELEM_API_KEY },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(25000),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`Telem search -> ${r.status} ${JSON.stringify(j.detail || j.error || j).slice(0, 200)}`);
+  if (j.session_id) session.telemSession = j.session_id;
+  const seen = new Set(), out = [];
+  for (const run of j.preprocessor_runs || []) for (const x of (run.output_payload && run.output_payload.results) || []) {
+    if (!x.url || seen.has(x.url)) continue;
+    seen.add(x.url);
+    out.push({ title: String(x.title || x.url).slice(0, 120), url: x.url, summary: String(x.summary || x.excerpt || '').replace(/\s+/g, ' ').slice(0, 320) });
+  }
+  return out.slice(0, 4);
+}
+async function research(pitch) {
+  if (telem.status === 'off') return null;
+  const raj = agentById.cto;
+  try {
+    const pickd = await llmJSON(raj, `The vendor just pitched: "${pitch}"\n\nBefore the committee questions them, you will check ONE thing on the live web. Pick the claim whose truth or typical range outsiders can verify (a price level, an industry benchmark, what a certification really covers, a typical time saving). Write one web search query for it.
+Return JSON: {"claim":"<the vendor's claim, max 14 words>","query":"<web search query, max 12 words>"}`,
+      () => ({ claim: firstWords(pitch, 12), query: firstWords(pitch, 10) + ' industry benchmark' }));
+    const results = await telemSearch(String(pickd.query).slice(0, 200));
+    telem.status = 'ready';
+    if (!results.length) return null;
+    session.research = `Raj checked the vendor's claim "${pickd.claim}" on the live web (via Telem search, query: "${pickd.query}"). Findings:\n` +
+      results.map((x, i) => `${i + 1}. ${x.title}: ${x.summary} (${x.url})`).join('\n');
+    return logEvent({ type: 'research', agent: 'cto', topic: 'credibility', quote: String(pickd.claim).slice(0, 160),
+      text: `Checked the web for "${pickd.query}". Top sources: ${results.map((x) => x.title).join(' | ')}`.slice(0, 600),
+      reason: `Telem search, ${results.length} sources. ${results[0].summary.slice(0, 160)} (${results[0].url})` });
+  } catch (e) { telem.status = 'error'; console.error('[telem] ' + e.message); return null; }
+}
+const researchNote = () => (session.research ? `\n${session.research}\nUse these findings if they support or contradict the vendor.\n` : '');
 
 // ---------- LLM ----------
 function claudeCli(system, user) {
@@ -315,7 +359,7 @@ async function askQuestion(agent) {
   const hist = ins && ins.hist.length ? `In earlier sessions this same vendor was weakest on: ${ins.hist.slice(0, 2).map((h) => `${h.topic} (${h.avg_score}/10)`).join(', ')}.` : '';
   const out = await llmJSON(agent, `Conversation so far:\n${transcript()}\n\nLive analytics from the committee's shared data pipeline: ${w ? `the vendor's weakest topic right now is "${w.topic}" at ${w.avg_score}/10 across ${w.n_scores} scores.` : 'no scores yet.'} ${hist}
 Questions already asked: ${asked}.
-
+${researchNote()}
 Ask the vendor ONE pointed question, max 28 words. Attack the weakest topic from your own angle. If it was already asked about twice, or is far outside your concerns, press on your own top concern instead. Do not repeat an earlier question.
 Return JSON: {"question":"<spoken question>","topic":"<one of ${TOPICS.join(', ')}>","reason":"<why you chose this, max 18 words, mention the analytics if you used them>"}`,
     () => {
@@ -338,14 +382,15 @@ function insightEvent() {
 const QA_TURNS = 6; // two rounds of three agents
 
 async function handlePitch(text) {
-  session = { id: crypto.randomUUID(), seq: 0, events: [], turn: 0, step: 0, insight: null, pending: null, leanings: {} };
+  session = { id: crypto.randomUUID(), seq: 0, events: [], turn: 0, step: 0, insight: null, pending: null, leanings: {}, research: null, telemSession: null };
   bandOpenRoom();
   logEvent({ type: 'pitch', text });
   // Long term memory: what earlier sessions looked like, read before anyone speaks.
   const before = localInsight().hist;
   const memory = before.length ? `Committee memory: in earlier sessions this vendor was weakest on ${before.slice(0, 2).map((h) => h.topic).join(' and ')}.` : '';
-  const results = await Promise.all(AGENTS.map((a) => evaluate(a, text, memory)));
+  const [found, ...results] = await Promise.all([research(text), ...AGENTS.map((a) => evaluate(a, text, memory))]);
   const events = results.flat();
+  if (found) events.push(found);
   await refreshInsight();
   const ie = insightEvent(); if (ie) events.push(ie);
   events.push(await askQuestion(AGENTS[0]));
@@ -357,7 +402,7 @@ async function handleAnswer(text) {
   const asker = agentById[session.pending.agent];
   logEvent({ type: 'answer', text });
   session.pending = null;
-  const events = await evaluate(asker, text, `${asker.name} asked the vendor a question and this is the answer.`);
+  const events = await evaluate(asker, text, `${asker.name} asked the vendor a question and this is the answer.${researchNote()}`);
   await refreshInsight();
   const ie = insightEvent(); if (ie) events.push(ie);
   session.turn++;
@@ -373,10 +418,11 @@ async function handleStep() {
   const state = agentState();
   const ins = session.insight || { weak: [], claims: [] };
   const board = `Shared scoreboard from the data pipeline: ${ins.weak.map((w) => `${w.topic} ${w.avg_score}/10`).join(', ') || 'no scores'}. Your own average score of this vendor: ${(state.find((s) => s.id === AGENTS[step % 3].id) || {}).score ?? 'none'}/10.`;
+  const web = researchNote();
   if (step < 3) {
     const a = AGENTS[step];
     const inbox = await bandInbox(a.id);
-    const out = await llmJSON(a, `The vendor has left the room. The committee is now deliberating.\nFull conversation:\n${transcript()}\n\n${board}\n${inbox}\nSpeak to your colleagues by name. Argue your position in max 32 words. Disagree with a colleague if your concerns differ.
+    const out = await llmJSON(a, `The vendor has left the room. The committee is now deliberating.\nFull conversation:\n${transcript()}\n\n${board}\n${web}${inbox}\nSpeak to your colleagues by name. Argue your position in max 32 words. Disagree with a colleague if your concerns differ.
 Return JSON: {"say":"<spoken statement>","leaning":"BUY" | "NO_BUY" | "UNSURE","reason":"<max 15 words>"}`,
       () => {
         const sc = (state.find((s) => s.id === a.id) || {}).score ?? 5;
@@ -389,7 +435,7 @@ Return JSON: {"say":"<spoken statement>","leaning":"BUY" | "NO_BUY" | "UNSURE","
   if (step < 6) {
     const a = AGENTS[step - 3];
     const inbox = await bandInbox(a.id);
-    const out = await llmJSON(a, `The committee has deliberated. Full conversation including the deliberation:\n${transcript()}\n\n${board}\n${inbox}Your leaning before hearing everyone: ${session.leanings[a.id] || 'UNSURE'}.\n\nCast your final vote. You may change your mind if a colleague made a good point.
+    const out = await llmJSON(a, `The committee has deliberated. Full conversation including the deliberation:\n${transcript()}\n\n${board}\n${web}${inbox}Your leaning before hearing everyone: ${session.leanings[a.id] || 'UNSURE'}.\n\nCast your final vote. You may change your mind if a colleague made a good point.
 Return JSON: {"vote":"BUY" | "NO_BUY","say":"<spoken vote with one sentence of why, max 22 words>","reason":"<the single biggest factor, max 15 words>","changed_mind":true | false}`,
       () => {
         const sc = (state.find((s) => s.id === a.id) || {}).score ?? 5;
@@ -435,7 +481,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/api/')) {
     try {
       if (url.pathname === '/api/status') {
-        return send(res, 200, { provider: PROVIDER, model: MODEL, bruin: bruinStatus, band: band.status, bandRoom: band.room, agents: AGENTS.map(({ id, name, role, cares }) => ({ id, name, role, cares })), topics: TOPICS, pastSessions: new Set(allEvents.map((e) => e.session_id)).size });
+        return send(res, 200, { provider: PROVIDER, model: MODEL, bruin: bruinStatus, band: band.status, telem: telem.status, bandRoom: band.room, agents: AGENTS.map(({ id, name, role, cares }) => ({ id, name, role, cares })), topics: TOPICS, pastSessions: new Set(allEvents.map((e) => e.session_id)).size });
       }
       if (req.method !== 'POST') return send(res, 405, { error: 'POST only' });
       if (busy) return send(res, 429, { error: 'The committee is still thinking.' });
@@ -468,5 +514,6 @@ Promise.all([findBruin(), bandInit()]).then(() => {
     console.log(`  LLM:   ${PROVIDER === 'mock' ? 'DEMO MODE (no API key found in .env, agents use canned lines)' : PROVIDER + ' / ' + MODEL}`);
     console.log(`  Bruin: ${bruinBin ? 'found at ' + bruinBin : 'NOT FOUND. Install it, then restart. Using local fallback for now.'}\n`);
     console.log(`  BAND:  ${band.status === 'ready' ? 'connected as ' + AGENTS.map((a) => band.me[a.id].handle).join(', ') : band.status === 'off' ? 'off (add the three BAND_*_KEY values to .env to turn it on)' : 'ERROR, see above'}\n`);
+    console.log(`  Telem: ${telem.status === 'ready' ? 'on (live web fact-check)' : 'off (add TELEM_API_KEY to .env to turn it on)'}\n`);
   });
 });

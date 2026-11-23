@@ -20,7 +20,7 @@ columns:
     checks:
       - name: not_null
       - name: accepted_values
-        value: ["pitch", "claim_score", "reaction", "question", "answer", "insight", "deliberation", "vote", "verdict"]
+        value: ["pitch", "claim_score", "reaction", "question", "answer", "insight", "research", "deliberation", "vote", "verdict"]
   - name: score
     type: double
     description: Agent score of a vendor claim, 0 to 10

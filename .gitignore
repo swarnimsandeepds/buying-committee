@@ -1,5 +1,6 @@
 node_modules
 .env
+server.log
 data/*.db
 data/*.db.wal
 data/events.jsonl
@@ -10,6 +11,4 @@ logs/*.log
 __pycache__/
 *.py[cod]
 logs/queries
-.bruin.ymlserver.log
-
 .bruin.yml

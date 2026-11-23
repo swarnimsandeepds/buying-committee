@@ -13,15 +13,16 @@ Built at the Multiplayer AI Hackathon, Track 3: Grow with Agents.
 | Voice | Each agent has its own voice. You answer by microphone |
 | Visible decisions | Decision ledger on the right: every score, question choice, argument and vote, with the reason |
 | Agents coordinate about the human | Open deliberation after you leave the room, then a vote. Agents can change their minds |
-| Agents adapt | After every answer the Bruin pipeline recomputes your weakest topic and the next agent attacks it |
+| Agents adapt | One question per member, and they stop early if all three have already made up their minds. After every answer the Bruin pipeline recomputes your weakest topic and the next agent attacks it |
 | Memory that changes decisions | Bruin keeps every past session. The committee starts the next pitch knowing where you were weak last time |
 | Clear result with evidence | Verdict screen with each vote, your three weakest quotes and score by topic |
 
 ## How Bruin is used (mandatory tool)
 
 1. The server appends every agent decision to `data/events.jsonl`.
-2. After every turn it runs `bruin run pipeline`, which builds five DuckDB tables with quality checks:
-   `raw.events`, `analytics.topic_scores`, `analytics.weak_topics`, `analytics.weakest_claims`, `analytics.pitcher_history`.
+2. After every turn it runs `bruin run pipeline`, which builds seven DuckDB tables with quality checks:
+   `raw.events`, `analytics.topic_scores`, `analytics.weak_topics`, `analytics.weakest_claims`, `analytics.strongest_claims`, `analytics.score_trend`, `analytics.pitcher_history`.
+4. The verdict screen is an interactive Bruin report: a radar of scores by topic, a claim-by-claim trend line, filters per buyer and topic, and pros and cons with the exact quotes.
 3. The server reads those tables back with `bruin query` and hands the result to the next agent.
 
 Bruin is the agents' shared memory and the source of the ledger, the adaptive questions and the final feedback.

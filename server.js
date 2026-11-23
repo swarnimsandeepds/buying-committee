@@ -30,11 +30,11 @@ const MODEL = process.env.LLM_MODEL || (PROVIDER === 'anthropic' ? 'claude-haiku
 const TOPICS = ['cost', 'roi', 'security', 'integration', 'usability', 'adoption', 'credibility'];
 const AGENTS = [
   { id: 'cfo', name: 'Dana', role: 'CFO', cares: ['cost', 'roi', 'credibility'],
-    persona: 'Numbers first, dry, impatient with vague claims. You have killed three vendor deals this quarter and you want a payback period, not adjectives.' },
+    persona: 'Numbers first, calm and courteous. You have seen deals fail on weak math, so you ask for a payback period, but you ask kindly and you say so when a number is good.' },
   { id: 'cto', name: 'Raj', role: 'CTO', cares: ['security', 'integration', 'credibility'],
-    persona: 'Blunt and technical. You have been burned by a vendor data breach before. You distrust anything that says "seamless" and you want specifics.' },
+    persona: 'Technical, thoughtful and polite. A past vendor breach made you careful, so you ask for specifics, but you explain why you are asking and you respect honest answers.' },
   { id: 'user', name: 'Maya', role: 'Head of Sales Ops', cares: ['usability', 'adoption', 'credibility'],
-    persona: 'Warm but protective of your team. Your people are tired of new tools. You want to know what changes on Monday morning.' },
+    persona: 'Warm, encouraging and protective of your team. Your people are tired of new tools, so you want to know what changes on Monday morning, and you help the vendor explain it.' },
 ];
 const agentById = Object.fromEntries(AGENTS.map((a) => [a.id, a]));
 
@@ -112,6 +112,24 @@ function localInsight() {
   const claims = mine.filter((e) => e.quote).sort((a, b) => a.score - b.score || a.seq - b.seq).slice(0, 3)
     .map((e) => ({ agent: e.agent, topic: e.topic, score: e.score, quote: e.quote, reason: e.reason }));
   return { weak, table, hist, claims };
+}
+
+// Extra data for the final report: strongest claims and the score trend. Call after refreshInsight().
+async function reportData() {
+  const sid = session.id.replace(/[^a-f0-9-]/g, '');
+  const num = (rows) => { for (const r of rows) for (const f of ['score', 'running_avg', 'step', 'seq']) if (r[f] != null) r[f] = Number(r[f]); return rows; };
+  if (bruinBin && session.insight && session.insight.source === 'bruin') {
+    try {
+      const pros = await bruinQuery(`SELECT agent, topic, score, quote, reason FROM analytics.strongest_claims WHERE session_id = '${sid}' ORDER BY claim_rank LIMIT 3`);
+      const trend = await bruinQuery(`SELECT step, agent, topic, score, quote, reason, running_avg FROM analytics.score_trend WHERE session_id = '${sid}' ORDER BY step`);
+      return { pros: num(pros), trend: num(trend) };
+    } catch (e) { console.error('[bruin] report query failed, using local fallback: ' + String(e.stderr || e.message).slice(0, 300)); }
+  }
+  const mine = session.events.filter((e) => e.type === 'claim_score' && e.score != null && e.topic);
+  let sum = 0;
+  const trend = mine.map((e, i) => { sum += e.score; return { step: i + 1, agent: e.agent, topic: e.topic, score: e.score, quote: e.quote, reason: e.reason, running_avg: Math.round((sum / (i + 1)) * 100) / 100 }; });
+  const pros = mine.filter((e) => e.quote).sort((a, b) => b.score - a.score || a.seq - b.seq).slice(0, 3).map((e) => ({ agent: e.agent, topic: e.topic, score: e.score, quote: e.quote, reason: e.reason }));
+  return { pros, trend };
 }
 
 // Runs the Bruin pipeline, then reads the analytics tables back. Falls back to in-process math if Bruin is unavailable.
@@ -303,6 +321,7 @@ async function llmJSON(agent, task, mock) {
 Personality: ${agent.persona}
 You care most about: ${agent.cares.join(', ')}.
 You have your own goals and you do not automatically agree with your colleagues.
+Tone: you are here to help this person get better at pitching. Be respectful, empathetic and constructive. Never be rude, sarcastic or dismissive. Acknowledge what was good or honest before you raise a concern, thank them for clear answers, and phrase concerns as what would help you say yes. You can still be rigorous: kindness is in how you say it, not in lowering your standards.
 Everything you say will be spoken aloud, so use short natural spoken sentences. No markdown, no emojis.
 Reply with ONLY one valid JSON object and nothing else.`;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -336,12 +355,12 @@ function agentState() {
 
 // An agent scores what the vendor just said. Returns ledger events.
 async function evaluate(agent, said, context) {
-  const out = await llmJSON(agent, `Conversation so far:\n${transcript()}\n\n${context}\nThe vendor just said: "${said}"\n\nScore what the vendor just said, only on topics it actually touched. Allowed topics: ${TOPICS.join(', ')}. Be a tough but fair grader: vague claims with no numbers or proof score 2 to 4, specific and believable claims score 7 to 9.
-Return JSON: {"scores":[{"topic":"<allowed topic>","score":<0-10>,"quote":"<exact short phrase the vendor said, max 14 words>","reason":"<why, max 18 words>"}],"reaction":"<one spoken sentence reacting to the vendor, max 14 words>"}
+  const out = await llmJSON(agent, `Conversation so far:\n${transcript()}\n\n${context}\nThe vendor just said: "${said}"\n\nScore what the vendor just said, only on topics it actually touched. Allowed topics: ${TOPICS.join(', ')}. Be a fair, encouraging grader: vague claims with no numbers or proof score 3 to 5, specific and believable claims score 7 to 9, and honest admissions of what they do not know yet deserve credit. Write each reason as helpful coaching, not criticism.
+Return JSON: {"scores":[{"topic":"<allowed topic>","score":<0-10>,"quote":"<exact short phrase the vendor said, max 14 words>","reason":"<why, max 18 words>"}],"reaction":"<one warm, respectful spoken sentence reacting to the vendor, max 16 words>"}
 Give 1 to 2 items in scores.`,
     () => ({
       scores: [{ topic: pick(agent.cares), score: 2 + Math.floor(Math.random() * 7), quote: firstWords(said, 9), reason: 'Demo mode score. Add an API key for real judgment.' }],
-      reaction: pick(['I need numbers, not adjectives.', 'That is more specific. Keep going.', 'I am not convinced yet.', 'Okay, that helps a little.']),
+      reaction: pick(['Thank you. A number or two would help me here.', 'That is clearer, thank you. Please keep going.', 'I appreciate that. I would like a bit more detail.', 'That helps, thank you.']),
     }));
   const events = [];
   for (const s of (out.scores || []).slice(0, 2)) {
@@ -360,11 +379,11 @@ async function askQuestion(agent) {
   const out = await llmJSON(agent, `Conversation so far:\n${transcript()}\n\nLive analytics from the committee's shared data pipeline: ${w ? `the vendor's weakest topic right now is "${w.topic}" at ${w.avg_score}/10 across ${w.n_scores} scores.` : 'no scores yet.'} ${hist}
 Questions already asked: ${asked}.
 ${researchNote()}
-Ask the vendor ONE pointed question, max 28 words. Attack the weakest topic from your own angle. If it was already asked about twice, or is far outside your concerns, press on your own top concern instead. Do not repeat an earlier question.
+Ask the vendor ONE clear question, max 30 words, in a friendly and respectful way. Start with a brief acknowledgement of something they said well, then explore the weakest topic from your own angle. If it was already asked about twice, or is far outside your concerns, press on your own top concern instead. Do not repeat an earlier question.
 Return JSON: {"question":"<spoken question>","topic":"<one of ${TOPICS.join(', ')}>","reason":"<why you chose this, max 18 words, mention the analytics if you used them>"}`,
     () => {
       const topic = w ? w.topic : agent.cares[0];
-      return { question: `You scored lowest on ${topic}. Give me one concrete number or proof point on ${topic}.`, topic, reason: `Pipeline shows ${topic} is the weakest topic so far.` };
+      return { question: `Thanks for that. Could you share one concrete number or proof point on ${topic}? It would really help us.`, topic, reason: `Pipeline shows ${topic} is the weakest topic so far.` };
     });
   if (!TOPICS.includes(out.topic)) out.topic = agent.cares[0];
   const ev = logEvent({ type: 'question', agent: agent.id, topic: out.topic, text: String(out.question), reason: String(out.reason || '') });
@@ -379,7 +398,17 @@ function insightEvent() {
   return { ...logEvent({ type: 'insight', topic: i.weakest.topic, score: i.weakest.avg_score, text, reason: i.source === 'bruin' ? 'Computed by the Bruin pipeline' : 'Local fallback, Bruin not available' }), source: i.source };
 }
 
-const QA_TURNS = 6; // two rounds of three agents
+const QA_TURNS = Number(process.env.QA_TURNS) || 3; // one question per committee member
+// The committee stops early when it has already made up its mind: after two answers, if all
+// three members score the vendor clearly high or clearly low, a third question would not change the vote.
+function committeeDecided() {
+  if (session.turn < 2) return null;
+  const sc = agentState().map((a) => a.score).filter((x) => x != null);
+  if (sc.length < AGENTS.length) return null;
+  if (sc.every((x) => x >= 7.5)) return 'All three members already score the vendor 7.5 or higher. No more questions needed.';
+  if (sc.every((x) => x <= 3.5)) return 'All three members already score the vendor 3.5 or lower. No more questions needed.';
+  return null;
+}
 
 async function handlePitch(text) {
   session = { id: crypto.randomUUID(), seq: 0, events: [], turn: 0, step: 0, insight: null, pending: null, leanings: {}, research: null, telemSession: null };
@@ -406,7 +435,9 @@ async function handleAnswer(text) {
   await refreshInsight();
   const ie = insightEvent(); if (ie) events.push(ie);
   session.turn++;
-  const done = session.turn >= QA_TURNS;
+  const early = committeeDecided();
+  if (early && session.turn < QA_TURNS) events.push(logEvent({ type: 'insight', text: 'Committee is ready to decide early. ' + early, reason: 'Scores are unanimous, so the remaining questions were skipped' }));
+  const done = session.turn >= QA_TURNS || !!early;
   if (!done) events.push(await askQuestion(AGENTS[session.turn % AGENTS.length]));
   return { events, agents: agentState(), insight: session.insight, pending: session.pending, done };
 }
@@ -422,7 +453,7 @@ async function handleStep() {
   if (step < 3) {
     const a = AGENTS[step];
     const inbox = await bandInbox(a.id);
-    const out = await llmJSON(a, `The vendor has left the room. The committee is now deliberating.\nFull conversation:\n${transcript()}\n\n${board}\n${web}${inbox}\nSpeak to your colleagues by name. Argue your position in max 32 words. Disagree with a colleague if your concerns differ.
+    const out = await llmJSON(a, `The vendor has left the room. The committee is now deliberating.\nFull conversation:\n${transcript()}\n\n${board}\n${web}${inbox}\nSpeak to your colleagues by name. Give your position in max 34 words. Be fair to the vendor: name one thing they did well as well as your concern. Disagree with a colleague politely if your concerns differ.
 Return JSON: {"say":"<spoken statement>","leaning":"BUY" | "NO_BUY" | "UNSURE","reason":"<max 15 words>"}`,
       () => {
         const sc = (state.find((s) => s.id === a.id) || {}).score ?? 5;
@@ -436,7 +467,7 @@ Return JSON: {"say":"<spoken statement>","leaning":"BUY" | "NO_BUY" | "UNSURE","
     const a = AGENTS[step - 3];
     const inbox = await bandInbox(a.id);
     const out = await llmJSON(a, `The committee has deliberated. Full conversation including the deliberation:\n${transcript()}\n\n${board}\n${web}${inbox}Your leaning before hearing everyone: ${session.leanings[a.id] || 'UNSURE'}.\n\nCast your final vote. You may change your mind if a colleague made a good point.
-Return JSON: {"vote":"BUY" | "NO_BUY","say":"<spoken vote with one sentence of why, max 22 words>","reason":"<the single biggest factor, max 15 words>","changed_mind":true | false}`,
+Return JSON: {"vote":"BUY" | "NO_BUY","say":"<spoken vote with one kind, constructive sentence of why and what would change your mind, max 26 words>","reason":"<the single biggest factor, max 15 words>","changed_mind":true | false}`,
       () => {
         const sc = (state.find((s) => s.id === a.id) || {}).score ?? 5;
         const vote = sc >= 5.5 ? 'BUY' : 'NO_BUY';
@@ -451,13 +482,14 @@ Return JSON: {"vote":"BUY" | "NO_BUY","say":"<spoken vote with one sentence of w
   const verdict = buys >= 2 ? 'BUY' : 'NO BUY';
   await refreshInsight();
   const i = session.insight;
+  const rep = await reportData();
   const ev = logEvent({ type: 'verdict', topic: verdict, text: `${verdict}, ${buys} to ${votes.length - buys}`, reason: 'Majority vote of the committee' });
   return {
     events: [ev], agents: state, phase: 'verdict',
     verdict: {
       result: verdict, buys, total: votes.length,
       votes: votes.map((v) => ({ agent: v.agent, vote: v.topic, say: v.text, reason: v.reason })),
-      claims: i.claims, weak: i.weak, table: i.table, hist: i.hist, source: i.source,
+      claims: i.claims, weak: i.weak, table: i.table, hist: i.hist, source: i.source, pros: rep.pros, trend: rep.trend, rows: i.rows,
     },
   };
 }
@@ -481,7 +513,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/api/')) {
     try {
       if (url.pathname === '/api/status') {
-        return send(res, 200, { provider: PROVIDER, model: MODEL, bruin: bruinStatus, band: band.status, telem: telem.status, bandRoom: band.room, agents: AGENTS.map(({ id, name, role, cares }) => ({ id, name, role, cares })), topics: TOPICS, pastSessions: new Set(allEvents.map((e) => e.session_id)).size });
+        return send(res, 200, { maxQuestions: QA_TURNS, provider: PROVIDER, model: MODEL, bruin: bruinStatus, band: band.status, telem: telem.status, bandRoom: band.room, agents: AGENTS.map(({ id, name, role, cares }) => ({ id, name, role, cares })), topics: TOPICS, pastSessions: new Set(allEvents.map((e) => e.session_id)).size });
       }
       if (req.method !== 'POST') return send(res, 405, { error: 'POST only' });
       if (busy) return send(res, 429, { error: 'The committee is still thinking.' });

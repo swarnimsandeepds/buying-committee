@@ -421,7 +421,8 @@ async function llmRaw(system, user) {
     if (!r.ok) throw new Error('Anthropic API: ' + JSON.stringify(j.error || j));
     return j.content.map((c) => c.text || '').join('');
   }
-  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+  // OPENAI_BASE_URL lets any OpenAI-compatible provider stand in (for example Google Gemini's or Groq's free tier).
+  const r = await fetch((process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '') + '/chat/completions', {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.OPENAI_API_KEY },
     body: JSON.stringify({ model: MODEL, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }),

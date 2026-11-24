@@ -11,6 +11,11 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      # Optional: point OPENAI_API_KEY at another OpenAI-compatible provider and pick its model.
+      - key: OPENAI_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
       # Optional sponsor integrations. Leave any of them empty to switch that one off.
       - key: BAND_CFO_KEY
         sync: false

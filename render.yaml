@@ -13,9 +13,9 @@ services:
         sync: false
       # Optional: point OPENAI_API_KEY at another OpenAI-compatible provider and pick its model.
       - key: OPENAI_BASE_URL
-        sync: false
+        value: https://generativelanguage.googleapis.com/v1beta/openai
       - key: LLM_MODEL
-        sync: false
+        value: gemini-flash-lite-latest
       # Optional sponsor integrations. Leave any of them empty to switch that one off.
       - key: BAND_CFO_KEY
         sync: false

@@ -23,7 +23,12 @@ const PORT = Number(process.env.PORT) || 3000;
 // With no API key, fall back to the Claude Code CLI if it is installed (uses that login, no key needed).
 const CLAUDE_CLI = process.env.LLM_PROVIDER === 'mock' ? null
   : [path.join(os.homedir(), '.local', 'bin', 'claude'), '/usr/local/bin/claude', '/opt/homebrew/bin/claude'].find((c) => fs.existsSync(c)) || null;
-const PROVIDER = process.env.ANTHROPIC_API_KEY ? 'anthropic' : process.env.OPENAI_API_KEY ? 'openai' : CLAUDE_CLI ? 'claude-cli' : 'mock';
+// A Google AI Studio key (they start with "AIza") in OPENAI_API_KEY means Gemini: fill in its address and a model.
+if (/^AIza/.test(process.env.OPENAI_API_KEY || '')) {
+  if (!process.env.OPENAI_BASE_URL) process.env.OPENAI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai';
+  if (!process.env.LLM_MODEL) process.env.LLM_MODEL = 'gemini-flash-lite-latest';
+}
+const PROVIDER = process.env.ANTHROPIC_API_KEY ? 'anthropic' : process.env.OPENAI_API_KEY ? (/googleapis/.test(process.env.OPENAI_BASE_URL || '') ? 'gemini' : 'openai') : CLAUDE_CLI ? 'claude-cli' : 'mock';
 const MODEL = process.env.LLM_MODEL || (PROVIDER === 'anthropic' ? 'claude-haiku-5-5' : PROVIDER === 'claude-cli' ? 'haiku' : 'gpt-4o-mini');
 
 // ---------- Agents ----------

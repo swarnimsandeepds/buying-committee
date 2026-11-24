@@ -62,7 +62,7 @@ cp .env.example .env      # then paste a key into .env
 node server.js
 ```
 
-Open http://localhost:3000 in Chrome. No npm install needed.
+Open http://localhost:3000 (https://buying-committee.onrender.com/) in Chrome. No npm install needed.
 
 No API key? If the Claude Code CLI is installed and signed in, the server uses it automatically (`claude -p`, about 20 seconds per turn). With neither, it runs in demo mode with canned lines.
 

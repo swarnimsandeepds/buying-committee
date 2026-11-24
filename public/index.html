@@ -312,7 +312,7 @@ function tick() {
     ch.lean += ((speaking ? 0.2 : 0) - ch.lean) * Math.min(1, dt * 4);
     ch.torso.rotation.x = ch.lean + Math.sin(t * 1.4 + ch.seed) * 0.012;
     ch.torso.position.y = 1.05 + Math.sin(t * 1.6 + ch.seed) * 0.012;
-    ch.mouth.scale.y = speaking ? 1 + Math.abs(Math.sin(t * 17 + ch.seed)) * 2.2 : 1;
+    ch.mouth.scale.y = speaking ? 0.7 + Math.abs(Math.sin(t * 15 + ch.seed)) * 0.9 : 1;
     if (t > ch.blinkAt + 0.13) ch.blinkAt = t + 2 + Math.random() * 4;
     const lid = t > ch.blinkAt ? 0.08 : 1; ch.eyes.forEach((e) => { e.scale.y = lid; });
     const mood = ch.score == null ? 0 : (5 - ch.score) / 5; // frown when unimpressed
